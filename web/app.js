@@ -1,17 +1,21 @@
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.89.0';
 import {SUPABASE_URL,SUPABASE_KEY} from './config.js';
 const $=id=>document.getElementById(id), client=createClient(SUPABASE_URL,SUPABASE_KEY);
-const status=s=>$('status').textContent=s;
+const status=s=>($('app').hidden?$('authStatus'):$('status')).textContent=s;
+let isAdmin=false;
+function showView(view){if(!['search','watches','coupons','admin'].includes(view)||view==='admin'&&!isAdmin)view='search';for(const v of ['search','watches','coupons','admin'])$(v+'View').hidden=v!==view;for(const b of document.querySelectorAll('[data-view]')){if(b.dataset.view===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')}if(view==='admin'){refreshAdmin();loadStores()}if(view==='coupons')$('coupons').click()}
+for(const b of document.querySelectorAll('[data-view]'))b.onclick=()=>showView(b.dataset.view);
+document.querySelector('.brand').onclick=e=>{e.preventDefault();if(!$('app').hidden)showView('search')};
 function fail(e){status(e?.message||String(e))}
 function node(tag,text,parent){const n=document.createElement(tag);n.textContent=text;parent.append(n);return n}
 function link(parent,url,label){try{const u=new URL(url);if(u.protocol==='https:'){const a=node('a',label,parent);a.href=u.href;a.target='_blank';a.rel='noopener noreferrer'}}catch{}}
-async function session(s){adminPanel.hidden=true;$('app').hidden=true;$('login').hidden=false;for(const id of ['results','discounts','watches']) $(id).replaceChildren();if(!s)return;const {data,error}=await client.from('members').select('role').eq('user_id',s.user.id).maybeSingle();if(error||!data){status('Kontoen er ikke invitert.');await client.auth.signOut();return}$('login').hidden=true;$('app').hidden=false;status('Innlogget');adminPanel.hidden=data.role!=='admin';if(!adminPanel.hidden){refreshAdmin();loadStores();}await watches()}
+async function session(s){isAdmin=false;adminPanel.hidden=true;$('adminTab').hidden=true;$('logout').hidden=true;$('app').hidden=true;$('login').hidden=false;$('status').textContent='';for(const id of ['results','discounts','watches']) $(id).replaceChildren();if(!s)return;const {data,error}=await client.from('members').select('role').eq('user_id',s.user.id).maybeSingle();if(error||!data){status('Kontoen er ikke invitert.');await client.auth.signOut();return}$('login').hidden=true;$('app').hidden=false;$('authStatus').textContent='';$('logout').hidden=false;isAdmin=data.role==='admin';adminPanel.hidden=!isAdmin;$('adminTab').hidden=!isAdmin;showView('search');await watches()}
 $('loginForm').onsubmit=async e=>{e.preventDefault();const {data,error}=await client.auth.signInWithPassword({email:$('email').value,password:$('password').value});$('password').value='';if(error)fail(error);else await session(data.session)};
 $('logout').onclick=async()=>{clearSuggestions();searchVersion++;await client.auth.signOut();await session(null);status('Logget ut')};
 // Suggestions are from indexed offers, never invented product prices.
 const qInput=$('q'), suggestionBox=document.createElement('div');
 suggestionBox.id='suggestions';suggestionBox.setAttribute('aria-label','Produktforslag');
-qInput.parentElement.after(suggestionBox);
+qInput.parentElement.append(suggestionBox);
 let suggestTimer, suggestVersion=0, searchVersion=0;
 function clearSuggestions(){clearTimeout(suggestTimer);suggestVersion++;suggestionBox.replaceChildren()}
 qInput.addEventListener('input',()=>{
@@ -31,13 +35,11 @@ qInput.addEventListener('input',()=>{
 qInput.addEventListener('keydown',e=>{if(e.key==='Escape')clearSuggestions()});
 let pollTimer;
 function renderOffers(data,q){
- const root=$('results');root.replaceChildren();
+ const root=$('results');root.replaceChildren();$('resultCount').textContent=data.length+' treff';
  for(const r of data){
-  const card=node('article','',root);node('strong',r.name,card);
-  node('p',r.host+' · '+r.price+' kr'+(r.shipping==null?' + ukjent frakt':' · total '+r.total_price+' kr'),card);
-  node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),card);link(card,r.url,'Åpne butikk');
+  const card=node('article','',root);card.className='offer';const info=node('div','',card);node('strong',r.name,info);node('small',r.host,info);node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),info);link(info,r.url,'Åpne butikk');const price=node('div','',card);const amount=node('div',new Intl.NumberFormat('nb-NO',{maximumFractionDigits:2}).format(r.total_price??r.price)+' kr',price);amount.className='offer-price';node('small',r.shipping==null?'Frakt ukjent':'Inkl. frakt',price);
  }
- if(!data.length){node('p','Ingen dokumenterte treff ennå. Dette betyr ikke at varen ikke selges.',root);const b=node('button','Lagre som prisønske',root);b.type='button';b.onclick=()=>{$('watchQuery').value=q;$('target').focus()}}
+ if(!data.length){node('p','Ingen dokumenterte treff ennå. Dette betyr ikke at varen ikke selges.',root);const b=node('button','Lagre som prisønske',root);b.type='button';b.onclick=()=>{showView('watches');$('watchQuery').value=q;$('target').focus()}}
 }
 async function pollResults(q,version,deadline,previousAttempt,notice=''){
  if(version!==searchVersion||$('app').hidden)return;
@@ -66,7 +68,7 @@ $('searchForm').onsubmit=async e=>{
   if(tracked.data.due){
    const previous=progress.data?.last_attempt;
    let notice='Venter på crawleren …';
-   if(!adminPanel.hidden){try{await crawlerRequest('POST');notice='Prisinnhenting startet …'}catch(e){notice='Søket beholdes i kø: '+e.message}}
+   if(isAdmin){try{await crawlerRequest('POST');notice='Prisinnhenting startet …'}catch(e){notice='Søket beholdes i kø: '+e.message}}
    if(version===searchVersion)pollResults(q,version,Date.now()+9*60*1000,previous,notice);
   }
  }catch(e){if(version===searchVersion)fail(e)}
@@ -74,14 +76,14 @@ $('searchForm').onsubmit=async e=>{
 $('coupons').onclick=async()=>{const {data,error}=await client.from('coupons').select('*').order('checked',{ascending:false}).limit(100);if(error)return fail(error);const root=$('discounts');root.replaceChildren();for(const r of data){const c=node('article',r.host+' · '+r.code+' · '+r.status,root);node('small',r.context||'',c);link(c,r.source,'Kilde')}};
 async function watches(){const {data,error}=await client.from('watches').select('*');if(error)return fail(error);const root=$('watches');root.replaceChildren();for(const r of data){const c=node('article',r.query+' · '+r.target+' kr',root);const b=node('button','Slett',c);b.onclick=async()=>{const res=await client.from('watches').delete().eq('id',r.id);if(res.error)fail(res.error);else watches()}}}
 $('watchForm').onsubmit=async e=>{e.preventDefault();const {error}=await client.from('watches').insert({query:$('watchQuery').value,target:Number($('target').value)});if(error)fail(error);else{status('Prisønske lagret (varsling er ikke aktivert ennå).');watches()}};
-const adminPanel=document.createElement('section');adminPanel.hidden=true;$('app').append(adminPanel);
-node('h2','Crawler og produktindeks',adminPanel);
-const adminInfo=node('p','',adminPanel), runInfo=node('p','',adminPanel);
-const startButton=node('button','Start indeksering',adminPanel);
-const refreshButton=node('button','Oppdater status',adminPanel);
+const adminPanel=document.createElement('div');adminPanel.id='adminPanel';adminPanel.hidden=true;$('adminView').append(adminPanel);
+const crawlerPanel=node('section','',adminPanel);node('h2','Crawler og produktindeks',crawlerPanel);
+const adminInfo=node('p','',crawlerPanel), runInfo=node('p','',crawlerPanel);
+const startButton=node('button','Start indeksering',crawlerPanel);
+const refreshButton=node('button','Oppdater status',crawlerPanel);
 startButton.type=refreshButton.type='button';runInfo.setAttribute('role','status');runInfo.setAttribute('aria-live','polite');
-const quotaPanel=node('section','',adminPanel);node('h3','Kjørekvote',quotaPanel);const quotaInfo=node('p','Henter kvote …',quotaPanel);const extraButton=node('button','Start ekstra kjøring',quotaPanel);extraButton.type='button';extraButton.disabled=true;node('small','Interne grenser, ikke GitHubs faktiske faktureringssaldo. Ekstra kjøringer bruker samme 30-dagerskvote.',quotaPanel);link(quotaPanel,'https://github.com/settings/billing','Se faktisk GitHub-forbruk');const runList=node('div','',adminPanel);
-const storesPanel=node('section','',adminPanel);node('h3','Nettbutikker',storesPanel);const storeHost=node('input','',storesPanel);storeHost.placeholder='www.butikk.no';storeHost.autocapitalize='none';const storePath=node('input','',storesPanel);storePath.placeholder='/search?q={q} (valgfritt)';const saveStore=node('button','Legg til / oppdater butikk',storesPanel);saveStore.type='button';const storesList=node('div','',storesPanel);const storeStatus=node('p','',storesPanel);
+const quotaPanel=node('section','',adminPanel);node('h3','Kjørekvote',quotaPanel);const quotaInfo=node('p','Henter kvote …',quotaPanel);const extraButton=node('button','Start ekstra kjøring',quotaPanel);extraButton.type='button';extraButton.disabled=true;node('small','Interne grenser, ikke GitHubs faktiske faktureringssaldo. Ekstra kjøringer bruker samme 30-dagerskvote.',quotaPanel);link(quotaPanel,'https://github.com/settings/billing','Se faktisk GitHub-forbruk');const runList=node('div','',crawlerPanel);runList.id='runList';
+const storesPanel=node('section','',adminPanel);node('h3','Nettbutikker',storesPanel);const storeHost=node('input','',storesPanel);storeHost.placeholder='www.butikk.no';storeHost.setAttribute('aria-label','Butikkdomene');storeHost.autocapitalize='none';const storePath=node('input','',storesPanel);storePath.placeholder='/search?q={q} (valgfritt)';storePath.setAttribute('aria-label','Søkesti');const saveStore=node('button','Legg til / oppdater butikk',storesPanel);saveStore.type='button';const storesList=node('div','',storesPanel);const storeStatus=node('p','',storesPanel);
 async function loadStores(){const {data,error}=await client.from('managed_stores').select('host,search_path,enabled,paused_until').order('host');if(error){storeStatus.textContent=error.message;return}storesList.replaceChildren();for(const s of data){const row=node('article','',storesList);node('strong',s.host,row);node('small',' · '+(s.enabled?'Aktiv':'Deaktivert')+' · '+(s.search_path||'Sitemap')+(s.paused_until&&new Date(s.paused_until)>new Date()?' · midlertidig pause':''),row);const edit=node('button','Rediger',row);edit.type='button';edit.onclick=()=>{storeHost.value=s.host;storePath.value=s.search_path||''};const toggle=node('button',s.enabled?'Deaktiver':'Aktiver',row);toggle.type='button';toggle.onclick=async()=>{const r=await client.rpc('save_store_v1',{h:s.host,p:s.search_path,active:!s.enabled});storeStatus.textContent=r.error?r.error.message:'Butikk oppdatert';if(!r.error)loadStores()}}}
 saveStore.onclick=async()=>{const r=await client.rpc('save_store_v1',{h:storeHost.value,p:storePath.value,active:true});storeStatus.textContent=r.error?r.error.message:'Butikk lagret';if(!r.error){storeHost.value='';storePath.value='';loadStores()}};
 async function refreshQuota(){const {data,error}=await client.rpc('crawl_quota_status_v1');if(error){quotaInfo.textContent='Kvoteoversikt utilgjengelig: '+error.message;return null}quotaInfo.textContent='Siste 24 timer: '+data.used_day+' starter. Ordinære igjen: '+data.normal_remaining+'. Ekstra igjen: '+data.extra_remaining+'. Siste 30 dager: '+data.used_30d+' av '+data.manual_cap+' starter. Anslått maksimalt manuelt forbruk: '+data.estimated_max_minutes_30d+' minutter. Tidligste mulige ekstra start: '+new Date(data.next_start).toLocaleString('nb-NO');return data}
@@ -120,4 +122,4 @@ async function startCrawler(extra=false){if(adminBusy)return;adminBusy=true;star
 }
 startButton.onclick=()=>startCrawler(false);extraButton.onclick=()=>startCrawler(true);
 refreshButton.onclick=()=>{refreshAdmin();loadStores()};
-const {data}=await client.auth.getSession();await session(data.session);client.auth.onAuthStateChange((event)=>{if(event==='SIGNED_OUT'){ adminPanel.hidden=true; $('app').hidden=true;$('login').hidden=false;for(const id of ['results','discounts','watches'])$(id).replaceChildren()}});
+const {data}=await client.auth.getSession();await session(data.session);client.auth.onAuthStateChange((event)=>{if(event==='SIGNED_OUT'){isAdmin=false;searchVersion++;clearTimeout(pollTimer);$('logout').hidden=true;$('adminTab').hidden=true; adminPanel.hidden=true; $('app').hidden=true;$('login').hidden=false;for(const id of ['results','discounts','watches'])$(id).replaceChildren()}});
