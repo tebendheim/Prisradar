@@ -30,7 +30,7 @@ begin
  insert into public.search_offer_links(query,offer_id)
  select normalized,o.id from public.offers o where o.gtin=normalized or lower(o.model)=normalized or strpos(lower(o.name),normalized)>0 or to_tsvector('simple',o.name) @@ plainto_tsquery('simple',normalized)
  on conflict do nothing;
- insert into public.product_catalog(name,source) select o.name,o.url from public.offers o join public.search_offer_links l on l.offer_id=o.id where l.query=normalized on conflict(name) do update set source=excluded.source where product_catalog.source='search';
+ insert into public.product_catalog(name,source) select distinct on(o.name) o.name,o.url from public.offers o join public.search_offer_links l on l.offer_id=o.id where l.query=normalized order by o.name,o.checked desc on conflict(name) do update set source=excluded.source where product_catalog.source='search';
  select count(*) into n from public.search_offer_links where query=normalized;
  return jsonb_build_object('query',normalized,'due',due<=now(),'offers',n);
 end $$;
@@ -44,5 +44,42 @@ select jsonb_build_object('last_attempt',a.last_attempt,'next_check',a.next_chec
 $$;
 revoke all on function public.save_store_v1(text,text,boolean),public.search_progress_v1(text) from public,anon;
 grant execute on function public.save_store_v1(text,text,boolean),public.search_progress_v1(text) to authenticated;
+-- Normalize only formatting, never strip model numbers or variant words.
+create or replace function public.catalog_key_v1(n text) returns text
+language sql immutable set search_path='' as $
+select trim(regexp_replace(lower(n),'[^[:alnum:]æøå]+',' ','g'))
+$;
+create index if not exists catalog_key_idx on public.product_catalog(public.catalog_key_v1(name));
+alter table public.product_catalog add column if not exists gtin text;
+create index if not exists catalog_gtin_idx on public.product_catalog(gtin) where gtin is not null;
+create or replace function public.learn_catalog_v1(n text, src text, g text default null) returns void
+language plpgsql security definer set search_path='' as $
+begin
+ if n is null or length(trim(n)) not between 2 and 500 or src is null or src='search' then return;end if;
+ if g is not null and g !~ '^([0-9]{8}|[0-9]{12,14}) pgrst,'reload schema';
+ then g:=null;end if;
+ perform pg_catalog.pg_advisory_xact_lock(812340024);
+ if g is not null and exists(select 1 from public.product_catalog c where c.gtin=g) then return;end if;
+ if exists(select 1 from public.product_catalog c where public.catalog_key_v1(c.name)=public.catalog_key_v1(n) and c.source<>'search' and (g is null or c.gtin is null or c.gtin=g)) then
+  if g is not null then update public.product_catalog c set gtin=g where public.catalog_key_v1(c.name)=public.catalog_key_v1(n) and c.gtin is null and c.source<>'search';end if;
+  return;
+ end if;
+ insert into public.product_catalog(name,source,gtin) values(trim(n),src,g) on conflict(name) do update set source=excluded.source,gtin=coalesce(product_catalog.gtin,excluded.gtin) where product_catalog.source='search';
+end $;
+create or replace function public.suggest_products_v1(q text) returns table(name text,source text)
+language sql stable security definer set search_path='' as $
+ with candidates as (
+ select c.name,c.source,coalesce(c.gtin,public.catalog_key_v1(c.name)) as identity_key,
+ case when strpos(public.catalog_key_v1(c.name),public.catalog_key_v1(q))=1 then 0 else 1 end as rank
+ from public.product_catalog c
+ where (select public.is_member()) and length(trim(q)) between 2 and 160 and length(public.catalog_key_v1(q))>=2
+ and c.source<>'search' and strpos(public.catalog_key_v1(c.name),public.catalog_key_v1(q))>0
+ ), unique_names as (
+ select distinct on(identity_key) * from candidates order by identity_key,rank,length(name),name
+ )
+ select u.name,u.source from unique_names u order by u.rank,length(u.name),u.name limit 12
+$;
+revoke all on function public.learn_catalog_v1(text,text,text) from public,anon,authenticated;
+grant execute on function public.learn_catalog_v1(text,text,text) to service_role;
 commit;
 notify pgrst,'reload schema';
