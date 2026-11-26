@@ -1,0 +1,33 @@
+begin;
+create table if not exists public.crawl_pages(host text not null,url text primary key,checked timestamptz, outcome text, next_check timestamptz not null default now());
+create index if not exists crawl_pages_due on public.crawl_pages(host,next_check);
+create table if not exists public.crawl_requests(id bigint generated always as identity primary key,user_id uuid not null default auth.uid() references auth.users(id), query text not null check(length(query) between 2 and 160), created timestamptz not null default now(), state text not null default 'queued' check(state in ('queued','processed')), processed timestamptz);
+create table if not exists public.store_candidates(host text primary key,source text not null, discovered timestamptz default now());
+create table if not exists public.crawl_reports(id bigint generated always as identity primary key,host text not null,created timestamptz default now(), pages integer not null,offers integer not null, detail text);
+alter table public.crawl_pages enable row level security;
+alter table public.crawl_requests enable row level security;
+alter table public.store_candidates enable row level security;
+alter table public.crawl_reports enable row level security;
+revoke all on public.crawl_pages,public.crawl_requests,public.store_candidates,public.crawl_reports from anon,authenticated;
+grant select on public.crawl_requests,public.crawl_reports,public.store_candidates to authenticated;
+grant all on public.crawl_pages,public.crawl_requests,public.store_candidates,public.crawl_reports to service_role;
+grant usage,select on sequence public.crawl_requests_id_seq,public.crawl_reports_id_seq to service_role;
+create policy request_read on public.crawl_requests for select to authenticated using(user_id=auth.uid() and (select public.is_member()));
+create policy report_read on public.crawl_reports for select to authenticated using(exists(select 1 from public.members where user_id=auth.uid() and role='admin'));
+create policy candidate_read on public.store_candidates for select to authenticated using(exists(select 1 from public.members where user_id=auth.uid() and role='admin'));
+create or replace function public.request_search_v1(q text) returns bigint language plpgsql security definer set search_path='' as $$
+declare n bigint;
+begin
+ if not exists(select 1 from public.members where user_id=auth.uid()) then raise exception 'Membership required'; end if;
+ q:=trim(q);
+ if q is null or length(q) not between 2 and 160 then raise exception 'Invalid query';end if;
+ perform pg_catalog.pg_advisory_xact_lock(812340022);
+ select id into n from public.crawl_requests where user_id=auth.uid() and lower(query)=lower(q) and state='queued' order by id desc limit 1;
+ if n is not null then return n; end if;
+ if (select count(*) from public.crawl_requests where user_id=auth.uid() and created>now()-interval '24 hours')>=10 then raise exception 'Daily request limit'; end if;
+ if (select count(*) from public.crawl_requests where state='queued')>=50 then raise exception 'Queue full';end if;
+ insert into public.crawl_requests(user_id,query) values(auth.uid(),q) returning id into n;return n;
+end $$;
+revoke all on function public.request_search_v1(text) from public,anon;
+grant execute on function public.request_search_v1(text) to authenticated;
+commit;
