@@ -1,0 +1,9 @@
+# PrisRadar cloud prototype
+This is a separate cloud foundation, not a full port of v3.
+1. In Supabase SQL Editor run supabase/schema.sql once. In Authentication settings disable public signup. Create a user in Authentication > Users (use a unique password and confirmed email). Insert their UUID into public.members with role admin, using the example at the bottom of schema.sql. Do not expose service role credentials.
+2. Edit web/config.js with project URL and publishable key (public values only). No secret key in source.
+3. In GitHub Settings > Secrets and variables > Actions add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (legacy service_role JWT). The crawler is privileged; restrict repository write access. Never paste these credentials into chat or commit them.
+4. Cloudflare Pages: connect private GitHub repo, main branch, no framework, no build command, output directory web. Use the free plan. HTTPS via pages.dev. The site shell is public, data is protected by RLS and membership. Configure Supabase Auth Site URL with the deployed HTTPS origin.
+5. GitHub Actions > Bounded crawl > Run workflow. Review logs. A missing secret causes skip, not a successful crawl. Daily job has 8 minute timeout and 40 page budget. Review billing limits and disable Actions paid usage if possible. No guarantees on store availability or free service quotas.
+6. Verify with an anonymous request, a signed-in nonmember, and an invited member before relying on deployment.
+Limitations: no live search, no checkout testing, no dynamic rendering, no automatic price alerts (saved wishes only), no full product matching or membership calculation, no persistent sitemap cursor, no complete v3 migration. Shipping is unknown. No MFA or password reset UI yet. PWA manifest only. Crawler tests are basic fixtures, not store integration tests. Do not consider this production-ready.
