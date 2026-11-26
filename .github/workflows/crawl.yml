@@ -25,8 +25,8 @@ jobs:
           PAGE_BUDGET: '40'
         run: |
           if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
-            echo 'Supabase secrets not configured; skipping crawl'
-            exit 0
+            echo 'Supabase secrets not configured'
+            exit 1
           fi
           export STORE_OFFSET=$(date +%j)
-          python crawler/crawl.py
+          python crawler/durable.py
