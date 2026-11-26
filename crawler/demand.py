@@ -11,25 +11,33 @@ from catalog_seed import MODELS, URLS
 def matches(text,q):
     terms=words(q)
     tokens=set(words(urllib.parse.unquote(text)))
+    terms=[t for t in terms if t!="apple"] or terms
     return bool(terms) and all(t in tokens for t in terms)
 
 def run():
     db("rpc/prune_searches_v1",None,"POST",{})
     for name,source in MODELS:
         db("rpc/learn_catalog_v1",None,"POST",{"n":name,"src":source,"g":None})
+    deadline=time.monotonic()+350
+    for _ in range(3):
+        if time.monotonic()>deadline-35:break
+        if not process_one(deadline):break
+
+def process_one(deadline):
     jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":"1"})
     if not jobs:
-        print("No active searches due");return
+        print("No active searches due");return False
     job=jobs[0];q=job["query"];stores=db("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until","limit":"500"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc)};hosts=list(config)
-    if not hosts: print("No enabled stores available");return
+    if not hosts: print("No enabled stores available");return False
     offset=int(os.environ.get("GITHUB_RUN_ID","0"))%len(hosts)
     hosts=hosts[offset:]+hosts[:offset]
     if "airpods" in words(q):
+        hosts=[h for h in hosts if h not in ("www.bakerenogkokken.no","www.fjellsport.no","www.jernia.no","www.kitchn.no")]
         hosts.sort(key=lambda h: 0 if h in ("www.power.no","eplehuset.no","www.eplehuset.no","www.komplett.no","www.elkjop.no") else 1)
     budget=min(65,int(os.environ.get("PAGE_BUDGET","60")))
     total=0
     for host in hosts:
-        if budget<3:break
+        if budget<3 or time.monotonic()>deadline-25:break
         count=0;found=0;detail="ok"
         try:
             if not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)):raise ValueError("nonpublic store address")
@@ -61,7 +69,7 @@ def run():
                     db("crawl_pages",{"on_conflict":"url"},"POST",[{"url":u,"host":host} for u in pages[i:i+500]],"resolution=ignore-duplicates,return=minimal")
                 candidates.update(u for u in pages if matches(u,q))
             for u in sorted(candidates,key=lambda u:(u not in known,u))[:5]:
-                if budget<=0:break
+                if budget<=0 or time.monotonic()>deadline-20:break
                 if urllib.parse.urlsplit(u).hostname!=host or not rp.can_fetch(UA,u):continue
                 budget-=1;count+=1
                 try:
@@ -87,4 +95,5 @@ def run():
             print(host,count,found,detail,flush=True)
     db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(1 if total else 0.25)},"return=minimal")
     print("Search:",q,"offers:",total,flush=True)
+    return True
 if __name__=="__main__":run()
