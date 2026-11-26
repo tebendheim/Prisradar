@@ -24,7 +24,7 @@ export async function onRequest({request,env}){
  if(active)return json({error:'Crawleren kjører allerede'},409);
  const reservation=await fetch(env.SUPABASE_URL+'/rest/v1/rpc/reserve_crawl_v1',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:'{}'});
  if(!reservation.ok)return json({error:'Kjør SQL-migreringen for crawlerstyring først'},503);
- if(await reservation.json()!==true)return json({error:'Kjørekvote: maks tre manuelle starter per 24 timer og minst 15 minutter mellom forsøk'},429);
+ if(await reservation.json()!==true)return json({error:'Kjørekvote: maks 10 manuelle starter per 24 timer, 120 per 30 dager og minst ett minutt mellom forsøk (forutsetter ny SQL-migrering)'},429);
  const d=await fetch(repo+'/dispatches',{method:'POST',headers:{...gh,'Content-Type':'application/json'},body:JSON.stringify({ref:'main'})});
  if(!d.ok)return json({error:'GitHub avviste starten',github_status:d.status},502);
  return json({accepted:true},202);
