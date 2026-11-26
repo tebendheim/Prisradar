@@ -1,0 +1,33 @@
+-- Run once in Supabase SQL editor. No public signup.
+begin;
+create table if not exists public.members (user_id uuid primary key references auth.users(id) on delete cascade, role text not null check(role in ('admin','member')));
+create table if not exists public.offers (id bigint generated always as identity primary key, url text not null, name text not null, host text not null, gtin text, model text, price numeric not null check(price>=0), shipping numeric check(shipping>=0), availability text, checked timestamptz not null default now(), unique(url,name));
+create index if not exists offers_name_search on public.offers using gin(to_tsvector('simple',name));
+create index if not exists offers_gtin on public.offers(gtin);
+create table if not exists public.coupons (id bigint generated always as identity primary key, host text not null, code text not null, source text not null, context text, status text not null default 'discovered' check(status in ('discovered','documented','tested','rejected')), checked timestamptz default now(), expires timestamptz, unique(host,code,source));
+create table if not exists public.watches (id bigint generated always as identity primary key, user_id uuid not null default auth.uid() references auth.users(id) on delete cascade, query text not null check(length(query) between 1 and 200), target numeric not null check(target>0), created timestamptz default now());
+create table if not exists public.price_history (id bigint generated always as identity primary key, offer_id bigint not null references public.offers(id) on delete cascade, price numeric not null, checked timestamptz default now());
+create or replace function public.is_member() returns boolean language sql stable security definer set search_path='' as $$ select exists(select 1 from public.members where user_id=auth.uid()) $$;
+revoke all on function public.is_member() from public;
+grant execute on function public.is_member() to authenticated;
+alter table public.members enable row level security;
+alter table public.offers enable row level security;
+alter table public.coupons enable row level security;
+alter table public.watches enable row level security;
+alter table public.price_history enable row level security;
+revoke all on public.members,public.offers,public.coupons,public.watches,public.price_history from anon,authenticated;
+grant select on public.members,public.offers,public.coupons,public.price_history to authenticated;
+grant select,insert,delete on public.watches to authenticated;
+grant usage,select on sequence public.watches_id_seq to authenticated;
+create policy own_membership on public.members for select to authenticated using(user_id=auth.uid());
+create policy member_offers on public.offers for select to authenticated using((select public.is_member()));
+create policy member_coupons on public.coupons for select to authenticated using((select public.is_member()));
+create policy member_history on public.price_history for select to authenticated using((select public.is_member()));
+create policy own_watches_select on public.watches for select to authenticated using(user_id=auth.uid() and (select public.is_member()));
+create policy own_watches_insert on public.watches for insert to authenticated with check(user_id=auth.uid() and (select public.is_member()));
+create policy own_watches_delete on public.watches for delete to authenticated using(user_id=auth.uid() and (select public.is_member()));
+create or replace function public.record_price() returns trigger language plpgsql set search_path='' as $$ begin if TG_OP='INSERT' then insert into public.price_history(offer_id,price) values(new.id,new.price); elsif old.price is distinct from new.price then insert into public.price_history(offer_id,price) values(new.id,new.price); end if; return new; end $$;
+create trigger record_price after insert or update on public.offers for each row execute function public.record_price();
+commit;
+-- After creating your user in Authentication > Users:
+-- insert into public.members(user_id,role) values ('YOUR-USER-UUID','admin');
