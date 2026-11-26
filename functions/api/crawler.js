@@ -1,10 +1,11 @@
+import {githubHeaders} from '../lib/github-app.js';
 const repo='https://api.github.com/repos/tebendheim/Prisradar/actions/workflows/crawl.yml';
 const json=(data,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 export async function onRequest({request,env}){
  try{
  const method=request.method;
  if(!['GET','POST'].includes(method))return json({error:'Method not allowed'},405);
- if(!env.SUPABASE_URL||!env.SUPABASE_PUBLISHABLE_KEY||!env.GITHUB_ACTIONS_TOKEN)return json({error:'Cloudflare-konfigurasjon mangler'},503);
+ if(!env.SUPABASE_URL||!env.SUPABASE_PUBLISHABLE_KEY)return json({error:'Supabase-konfigurasjon mangler i Cloudflare'},503);
  const auth=request.headers.get('Authorization');
  if(!auth?.startsWith('Bearer '))return json({error:'Logg inn'},401);
  if(method==='POST'&&request.headers.get('Origin')!==new URL(request.url).origin)return json({error:'Ugyldig opprinnelse'},403);
@@ -14,7 +15,7 @@ export async function onRequest({request,env}){
  const user=await u.json();
  const m=await fetch(env.SUPABASE_URL+'/rest/v1/members?select=role&user_id=eq.'+encodeURIComponent(user.id),{headers});
  if(!m.ok||!(await m.json()).some(x=>x.role==='admin'))return json({error:'Kun administrator'},403);
- const gh={Authorization:'Bearer '+env.GITHUB_ACTIONS_TOKEN,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'PrisRadar'};
+ let gh;try{gh=await githubHeaders(env)}catch(e){return json({error:e.message.startsWith('GitHub')?e.message:'GitHub App-nøkkelen kunne ikke leses'},503)}
  const r=await fetch(repo+'/runs?per_page=10',{headers:gh});
  if(!r.ok)return json({error:'GitHub kunne ikke lese kjøringer',github_status:r.status},502);
  const runs=(await r.json()).workflow_runs||[];
