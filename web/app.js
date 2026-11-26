@@ -5,7 +5,7 @@ const status=s=>$('status').textContent=s;
 function fail(e){status(e?.message||String(e))}
 function node(tag,text,parent){const n=document.createElement(tag);n.textContent=text;parent.append(n);return n}
 function link(parent,url,label){try{const u=new URL(url);if(u.protocol==='https:'){const a=node('a',label,parent);a.href=u.href;a.target='_blank';a.rel='noopener noreferrer'}}catch{}}
-async function session(s){adminPanel.hidden=true;$('app').hidden=true;$('login').hidden=false;for(const id of ['results','discounts','watches']) $(id).replaceChildren();if(!s)return;const {data,error}=await client.from('members').select('role').eq('user_id',s.user.id).maybeSingle();if(error||!data){status('Kontoen er ikke invitert.');await client.auth.signOut();return}$('login').hidden=true;$('app').hidden=false;status('Innlogget');adminPanel.hidden=data.role!=='admin';if(!adminPanel.hidden)refreshAdmin();await watches()}
+async function session(s){adminPanel.hidden=true;$('app').hidden=true;$('login').hidden=false;for(const id of ['results','discounts','watches']) $(id).replaceChildren();if(!s)return;const {data,error}=await client.from('members').select('role').eq('user_id',s.user.id).maybeSingle();if(error||!data){status('Kontoen er ikke invitert.');await client.auth.signOut();return}$('login').hidden=true;$('app').hidden=false;status('Innlogget');adminPanel.hidden=data.role!=='admin';if(!adminPanel.hidden){refreshAdmin();loadStores();}await watches()}
 $('loginForm').onsubmit=async e=>{e.preventDefault();const {data,error}=await client.auth.signInWithPassword({email:$('email').value,password:$('password').value});$('password').value='';if(error)fail(error);else await session(data.session)};
 $('logout').onclick=async()=>{clearSuggestions();searchVersion++;await client.auth.signOut();await session(null);status('Logget ut')};
 // Suggestions are from indexed offers, never invented product prices.
@@ -29,28 +29,47 @@ qInput.addEventListener('input',()=>{
   },300);
 });
 qInput.addEventListener('keydown',e=>{if(e.key==='Escape')clearSuggestions()});
+let pollTimer;
+function renderOffers(data,q){
+ const root=$('results');root.replaceChildren();
+ for(const r of data){
+  const card=node('article','',root);node('strong',r.name,card);
+  node('p',r.host+' · '+r.price+' kr'+(r.shipping==null?' + ukjent frakt':' · total '+r.total_price+' kr'),card);
+  node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),card);link(card,r.url,'Åpne butikk');
+ }
+ if(!data.length){node('p','Ingen dokumenterte treff ennå. Dette betyr ikke at varen ikke selges.',root);const b=node('button','Lagre som prisønske',root);b.type='button';b.onclick=()=>{$('watchQuery').value=q;$('target').focus()}}
+}
+async function pollResults(q,version,deadline,previousAttempt,notice=''){
+ if(version!==searchVersion||$('app').hidden)return;
+ try{
+  const [offers,progress]=await Promise.all([client.rpc('search_offers_v1',{q,max_results:100}),client.rpc('search_progress_v1',{q})]);
+  if(version!==searchVersion||$('app').hidden)return;
+  if(offers.error)throw offers.error;
+  renderOffers(offers.data,q);
+  const p=progress.data;const finished=!progress.error&&p?.last_attempt&&p.last_attempt!==previousAttempt;
+  status(offers.data.length+' dokumenterte treff. '+(finished?'Prisinnhenting avsluttet.':notice||'Venter på prisoppdatering …'));
+  if(!finished&&Date.now()<deadline)pollTimer=setTimeout(()=>pollResults(q,version,deadline,previousAttempt,notice),10000);
+  else if(!finished)status(offers.data.length+' dokumenterte treff. Automatisk visning avsluttet; søket beholdes i kø.');
+ }catch(e){if(version===searchVersion)fail(e)}
+}
 $('searchForm').onsubmit=async e=>{
-  e.preventDefault();clearSuggestions();const version=++searchVersion;
-  try{
-    const q=qInput.value.trim();if(!q)return;
-    status('Søker i produktindeksen …');
-    const tracked=await client.rpc('touch_search_v1',{q});if(tracked.error)throw tracked.error;
-    const {data,error}=await client.rpc('search_offers_v1',{q,max_results:100});
-    if(error)throw error;if(version!==searchVersion||$('app').hidden)return;
-    const root=$('results');root.replaceChildren();
-    for(const r of data){
-      const card=node('article','',root);node('strong',r.name,card);
-      node('p',r.host+' · '+r.price+' kr'+(r.shipping==null?' + ukjent frakt':' · total '+r.total_price+' kr'),card);
-      node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),card);link(card,r.url,'Åpne butikk');
-    }
-    if(!data.length){
-      node('p','Søket er registrert for automatisk prisinnhenting.',root);
-      node('p','Ingen indekserte treff. Dette betyr ikke at varen ikke selges. Crawleren må finne produktet først.',root);
-      const b=node('button','Lagre som prisønske',root);b.type='button';b.onclick=()=>{$('watchQuery').value=q;$('target').focus()};
-    }
-    status(data.length+' lagrede treff. '+(tracked.data.due?'Prisoppdatering er i kø.':'Prisene oppdateres etter planen.'));
-    if(tracked.data.due&&!adminPanel.hidden){try{await crawlerRequest('POST');if(version===searchVersion)status('Prisinnhenting startet. Søk på nytt etter kjøringen.')}catch(e){if(version===searchVersion)status('Søket er lagret i kø. '+e.message)}}
-  }catch(e){if(version===searchVersion)fail(e)}
+ e.preventDefault();clearSuggestions();clearTimeout(pollTimer);const version=++searchVersion;
+ try{
+  const q=qInput.value.trim();if(!q)return;
+  status('Søker …');
+  const tracked=await client.rpc('touch_search_v1',{q});if(tracked.error)throw tracked.error;
+  const [offers,progress]=await Promise.all([client.rpc('search_offers_v1',{q,max_results:100}),client.rpc('search_progress_v1',{q})]);
+  if(version!==searchVersion||$('app').hidden)return;
+  if(offers.error)throw offers.error;
+  renderOffers(offers.data,q);
+  status(offers.data.length+' dokumenterte treff. '+(tracked.data.due?'Prisoppdatering i kø.':'Lagrede priser.'));
+  if(tracked.data.due){
+   const previous=progress.data?.last_attempt;
+   let notice='Venter på crawleren …';
+   if(!adminPanel.hidden){try{await crawlerRequest('POST');notice='Prisinnhenting startet …'}catch(e){notice='Søket beholdes i kø: '+e.message}}
+   if(version===searchVersion)pollResults(q,version,Date.now()+9*60*1000,previous,notice);
+  }
+ }catch(e){if(version===searchVersion)fail(e)}
 };
 $('coupons').onclick=async()=>{const {data,error}=await client.from('coupons').select('*').order('checked',{ascending:false}).limit(100);if(error)return fail(error);const root=$('discounts');root.replaceChildren();for(const r of data){const c=node('article',r.host+' · '+r.code+' · '+r.status,root);node('small',r.context||'',c);link(c,r.source,'Kilde')}};
 async function watches(){const {data,error}=await client.from('watches').select('*');if(error)return fail(error);const root=$('watches');root.replaceChildren();for(const r of data){const c=node('article',r.query+' · '+r.target+' kr',root);const b=node('button','Slett',c);b.onclick=async()=>{const res=await client.from('watches').delete().eq('id',r.id);if(res.error)fail(res.error);else watches()}}}
@@ -62,6 +81,9 @@ const startButton=node('button','Start indeksering',adminPanel);
 const refreshButton=node('button','Oppdater status',adminPanel);
 startButton.type=refreshButton.type='button';runInfo.setAttribute('role','status');runInfo.setAttribute('aria-live','polite');
 const quotaPanel=node('section','',adminPanel);node('h3','Kjørekvote',quotaPanel);const quotaInfo=node('p','Henter kvote …',quotaPanel);const extraButton=node('button','Start ekstra kjøring',quotaPanel);extraButton.type='button';extraButton.disabled=true;node('small','Interne grenser, ikke GitHubs faktiske faktureringssaldo. Ekstra kjøringer bruker samme 30-dagerskvote.',quotaPanel);link(quotaPanel,'https://github.com/settings/billing','Se faktisk GitHub-forbruk');const runList=node('div','',adminPanel);
+const storesPanel=node('section','',adminPanel);node('h3','Nettbutikker',storesPanel);const storeHost=node('input','',storesPanel);storeHost.placeholder='www.butikk.no';storeHost.autocapitalize='none';const storePath=node('input','',storesPanel);storePath.placeholder='/search?q={q} (valgfritt)';const saveStore=node('button','Legg til / oppdater butikk',storesPanel);saveStore.type='button';const storesList=node('div','',storesPanel);const storeStatus=node('p','',storesPanel);
+async function loadStores(){const {data,error}=await client.from('managed_stores').select('host,search_path,enabled,paused_until').order('host');if(error){storeStatus.textContent=error.message;return}storesList.replaceChildren();for(const s of data){const row=node('article','',storesList);node('strong',s.host,row);node('small',' · '+(s.enabled?'Aktiv':'Deaktivert')+' · '+(s.search_path||'Sitemap')+(s.paused_until&&new Date(s.paused_until)>new Date()?' · midlertidig pause':''),row);const edit=node('button','Rediger',row);edit.type='button';edit.onclick=()=>{storeHost.value=s.host;storePath.value=s.search_path||''};const toggle=node('button',s.enabled?'Deaktiver':'Aktiver',row);toggle.type='button';toggle.onclick=async()=>{const r=await client.rpc('save_store_v1',{h:s.host,p:s.search_path,active:!s.enabled});storeStatus.textContent=r.error?r.error.message:'Butikk oppdatert';if(!r.error)loadStores()}}}
+saveStore.onclick=async()=>{const r=await client.rpc('save_store_v1',{h:storeHost.value,p:storePath.value,active:true});storeStatus.textContent=r.error?r.error.message:'Butikk lagret';if(!r.error){storeHost.value='';storePath.value='';loadStores()}};
 async function refreshQuota(){const {data,error}=await client.rpc('crawl_quota_status_v1');if(error){quotaInfo.textContent='Kvoteoversikt utilgjengelig: '+error.message;return null}quotaInfo.textContent='Siste 24 timer: '+data.used_day+' starter. Ordinære igjen: '+data.normal_remaining+'. Ekstra igjen: '+data.extra_remaining+'. Siste 30 dager: '+data.used_30d+' av '+data.manual_cap+' starter. Anslått maksimalt manuelt forbruk: '+data.estimated_max_minutes_30d+' minutter. Tidligste mulige ekstra start: '+new Date(data.next_start).toLocaleString('nb-NO');return data}
 let adminBusy=false;
 async function crawlerRequest(method,extra=false){
@@ -97,5 +119,5 @@ async function startCrawler(extra=false){if(adminBusy)return;adminBusy=true;star
  if(accepted)setTimeout(refreshAdmin,3000);else{const quota=await refreshQuota();extraButton.disabled=!quota||quota.extra_remaining===0;startButton.disabled=!!(quota&&quota.normal_remaining===0)}
 }
 startButton.onclick=()=>startCrawler(false);extraButton.onclick=()=>startCrawler(true);
-refreshButton.onclick=refreshAdmin;
+refreshButton.onclick=()=>{refreshAdmin();loadStores()};
 const {data}=await client.auth.getSession();await session(data.session);client.auth.onAuthStateChange((event)=>{if(event==='SIGNED_OUT'){ adminPanel.hidden=true; $('app').hidden=true;$('login').hidden=false;for(const id of ['results','discounts','watches'])$(id).replaceChildren()}});
