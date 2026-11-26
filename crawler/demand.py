@@ -14,7 +14,7 @@ def matches(text,q):
 
 def run():
     db("rpc/prune_searches_v1",None,"POST",{})
-    jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"next_check.asc","limit":"1"})
+    jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":"1"})
     if not jobs:
         print("No active searches due");return
     job=jobs[0];q=job["query"];stores=db("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until","limit":"500"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc)};hosts=list(config)
@@ -68,7 +68,7 @@ def run():
                     for o in offers:
                         rows=db("offers",{"url":"eq."+u,"name":"eq."+o["name"],"select":"id"})
                         if rows:db("search_offer_links",{"on_conflict":"query,offer_id"},"POST",[{"query":q,"offer_id":r["id"]} for r in rows],"resolution=ignore-duplicates,return=minimal")
-                        db("product_catalog",{"on_conflict":"name"},"POST",[{"name":o["name"],"source":u}],"resolution=merge-duplicates,return=minimal")
+                        db("rpc/learn_catalog_v1",None,"POST",{"n":o["name"],"src":u,"g":o.get("gtin")})
                     found+=len(offers);total+=len(offers)
                 except urllib.error.HTTPError as e:
                     if e.code in (403,429):detail=error_detail(e);break
