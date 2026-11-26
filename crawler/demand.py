@@ -5,7 +5,8 @@ from crawl import fetch,UA,extract,send,error_detail
 from product_parser import Page,walk,types
 from sources import microdata
 from store_search import search_url,links
-import socket,ipaddress
+import socket,ipaddress,time
+from catalog_seed import MODELS, URLS
 
 def matches(text,q):
     terms=words(q)
@@ -14,6 +15,8 @@ def matches(text,q):
 
 def run():
     db("rpc/prune_searches_v1",None,"POST",{})
+    for name,source in MODELS:
+        db("rpc/learn_catalog_v1",None,"POST",{"n":name,"src":source,"g":None})
     jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":"1"})
     if not jobs:
         print("No active searches due");return
@@ -21,6 +24,8 @@ def run():
     if not hosts: print("No enabled stores available");return
     offset=int(os.environ.get("GITHUB_RUN_ID","0"))%len(hosts)
     hosts=hosts[offset:]+hosts[:offset]
+    if "airpods" in words(q):
+        hosts.sort(key=lambda h: 0 if h in ("www.power.no","eplehuset.no","www.eplehuset.no","www.komplett.no","www.elkjop.no") else 1)
     budget=min(65,int(os.environ.get("PAGE_BUDGET","60")))
     total=0
     for host in hosts:
@@ -34,12 +39,14 @@ def run():
             if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):
                 detail="robots rate restriction";continue
             # Previously known matching URLs are looked up server-side, not just the first 1000 rows.
-            terms=words(q)
+            terms=[t for t in words(q) if t not in ("apple",) ] or words(q)
             params=[("host","eq."+host),("select","url"),("limit","40")]
             # PostgREST AND filters; terms are alphanumeric.
             params.extend(("url","ilike.*"+t+"*") for t in terms[:8])
             candidates={x["url"] for x in db("crawl_pages",params)}
-            if config[host]["search_path"] and budget>2:
+            known=[u for name,u in URLS if matches(name,q) and urllib.parse.urlsplit(u).hostname==host]
+            candidates.update(known)
+            if not known and config[host]["search_path"] and budget>2:
                 u=search_url(host,config[host]["search_path"],q)
                 if rp.can_fetch(UA,u):
                     budget-=1
@@ -53,7 +60,7 @@ def run():
                 for i in range(0,len(pages),500):
                     db("crawl_pages",{"on_conflict":"url"},"POST",[{"url":u,"host":host} for u in pages[i:i+500]],"resolution=ignore-duplicates,return=minimal")
                 candidates.update(u for u in pages if matches(u,q))
-            for u in sorted(candidates)[:5]:
+            for u in sorted(candidates,key=lambda u:(u not in known,u))[:5]:
                 if budget<=0:break
                 if urllib.parse.urlsplit(u).hostname!=host or not rp.can_fetch(UA,u):continue
                 budget-=1;count+=1
@@ -66,7 +73,7 @@ def run():
                     if not offers:continue
                     send("offers",offers,"url,name")
                     for o in offers:
-                        rows=db("offers",{"url":"eq."+u,"name":"eq."+o["name"],"select":"id"})
+                        rows=db("offers",{"url":"eq."+o["url"],"name":"eq."+o["name"],"select":"id"})
                         if rows:db("search_offer_links",{"on_conflict":"query,offer_id"},"POST",[{"query":q,"offer_id":r["id"]} for r in rows],"resolution=ignore-duplicates,return=minimal")
                         db("rpc/learn_catalog_v1",None,"POST",{"n":o["name"],"src":u,"g":o.get("gtin")})
                     found+=len(offers);total+=len(offers)
