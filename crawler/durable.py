@@ -1,0 +1,100 @@
+"""Durable crawling, using the existing bounded network and product parser."""
+import os,re,json,urllib.request,urllib.parse,time,datetime
+from crawl import fetch,opener,UA,error_detail,extract,coupon_extract,send
+from product_parser import product_hint
+import urllib.robotparser,urllib.error,xml.etree.ElementTree as ET
+from collections import deque
+def stamp(days=0):
+    return (datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=days)).isoformat()
+def db(table,params=None,method="GET",body=None,prefer=None):
+    base=os.environ["SUPABASE_URL"].rstrip("/")
+    if not re.fullmatch(r"https://[a-z0-9]+\.supabase\.co",base):raise ValueError("bad DB URL")
+    key=os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    h={"apikey":key,"Authorization":"Bearer "+key,"Content-Type":"application/json"}
+    if prefer:h["Prefer"]=prefer
+    u=base+"/rest/v1/"+table+("?"+urllib.parse.urlencode(params) if params else "")
+    with opener.open(urllib.request.Request(u,headers=h,data=json.dumps(body).encode() if body is not None else None,method=method),timeout=20) as r:
+        raw=r.read();return json.loads(raw) if raw else None
+def discover(host,rp,budget):
+    maps=deque(rp.site_maps() or ["https://"+host+"/sitemap.xml"]);seen=set();pages=set()
+    while maps and budget[0]>0 and len(seen)<6 and len(pages)<15000:
+        u=maps.popleft()
+        if u in seen or urllib.parse.urlsplit(u).hostname!=host or not rp.can_fetch(UA,u):continue
+        seen.add(u);budget[0]-=1
+        try:
+            tree=ET.fromstring(fetch(u,host,rp))
+            locs=[n.text for n in tree.findall("./{*}*/{*}loc") if n.text]
+            if tree.tag.endswith("sitemapindex"):
+                maps.extend(sorted(locs,key=lambda u:not bool(re.search("product|produkt|vare",u,re.I)))[:100])
+            else:
+                pages.update(u for u in locs if len(u)<=1500 and urllib.parse.urlsplit(u).hostname==host and urllib.parse.urlsplit(u).scheme=="https" and rp.can_fetch(UA,u))
+        except urllib.error.HTTPError as e:
+            if e.code in (403,429):raise
+        except (ValueError,ET.ParseError):continue
+    return sorted(pages,key=lambda u:(not product_hint(u),u))[:15000]
+def words(q):return re.findall(r"[a-z0-9æøå]+",q.lower())
+def relevance(u,q):
+    text=urllib.parse.unquote(u).lower()
+    return sum(w in text for w in words(q))
+def run():
+    hosts=[x.strip() for x in open("crawler/stores.txt") if x.strip() and not x.startswith("#")]
+    reqs=db("crawl_requests",{"state":"eq.queued","select":"id,query","order":"created.asc","limit":"5"})
+    # Process only after a bounded attempt across the selected stores.
+    offset=int(os.environ.get("STORE_OFFSET","0"))%len(hosts)
+    selected=(hosts[offset:]+hosts[:offset])[:4]
+    budget=[min(60,max(8,int(os.environ.get("PAGE_BUDGET","40"))))]
+    total=0; attempted=0
+    for host in selected:
+        if budget[0]<3:break
+        allocation=max(3,budget[0]//(len(selected)-attempted));attempted+=1
+        local=[allocation];count=0;found_count=0;detail="ok"
+        try:
+            local[0]-=1
+            raw=fetch("https://"+host+"/robots.txt",host)
+            rp=urllib.robotparser.RobotFileParser();rp.parse(raw.decode("utf8","replace").splitlines())
+            if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):
+                detail="robots rate restriction";continue
+            # Keep previously discovered pages and their next-check timestamps.
+            due=db("crawl_pages",{"host":"eq."+host,"next_check":"lte."+stamp(),"select":"url","order":"next_check.asc","limit":"1000"})
+            urls={x["url"] for x in due}
+            if len(urls)<10 or reqs:
+                discovery_budget=[min(5,max(0,local[0]-2))]
+                before=discovery_budget[0]
+                discovered=discover(host,rp,discovery_budget);local[0]-=before-discovery_budget[0]
+                for i in range(0,len(discovered),500):
+                    db("crawl_pages",{"on_conflict":"url"},"POST",[{"url":u,"host":host} for u in discovered[i:i+500]],"resolution=ignore-duplicates,return=minimal")
+                # Reload due pages, prioritizing matching fresh candidates without resetting history.
+                for req in reqs:
+                    for u in sorted(discovered,key=lambda u:relevance(u,req["query"]),reverse=True)[:5]:
+                        if relevance(u,req["query"])==len(words(req["query"])):urls.add(u)
+                if not urls:
+                    urls={x["url"] for x in db("crawl_pages",{"host":"eq."+host,"next_check":"lte."+stamp(),"select":"url","order":"next_check.asc","limit":"1000"})}
+            ordered=sorted(urls,key=lambda u:(-max([relevance(u,r["query"]) for r in reqs] or [0]),not product_hint(u),u))
+            for u in ordered:
+                if local[0]<=0:break
+                if urllib.parse.urlsplit(u).hostname!=host or not rp.can_fetch(UA,u):continue
+                local[0]-=1;count+=1;outcome="no structured offer"
+                try:
+                    raw=fetch(u,host,rp);offers=list(extract(raw,u,host))
+                    if offers:
+                        send("offers",offers,"url,name");found_count+=len(offers);total+=len(offers);outcome="offer"
+                    coupons=list(coupon_extract(raw,host,u))
+                    # Never overwrite a manually reviewed coupon status.
+                    if coupons:
+                        db("coupons",{"on_conflict":"host,code,source"},"POST",list({(x["host"],x["code"],x["source"]):x for x in coupons}.values()),"resolution=ignore-duplicates,return=minimal")
+                except urllib.error.HTTPError as e:
+                    outcome=error_detail(e)
+                    if e.code in (403,429):
+                        detail=outcome;break
+                except Exception as e:outcome=error_detail(e)
+                db("crawl_pages",{"url":"eq."+u},"PATCH",{"checked":stamp(),"outcome":outcome,"next_check":stamp(1 if outcome=="offer" else 14)},"return=minimal")
+        except Exception as e:detail=error_detail(e)
+        finally:
+            budget[0]-=allocation-local[0]
+            db("crawl_reports",None,"POST",{"host":host,"pages":count,"offers":found_count,"detail":detail},"return=minimal")
+            print(host,count,found_count,detail,flush=True)
+    if attempted:
+        for r in reqs:db("crawl_requests",{"id":"eq."+str(r["id"])},"PATCH",{"state":"processed","processed":stamp()},"return=minimal")
+    print("Offers:",total,flush=True)
+    if not total:raise SystemExit("No offers indexed; see crawl reports")
+if __name__=="__main__":run()
