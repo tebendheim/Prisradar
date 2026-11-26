@@ -20,7 +20,7 @@ qInput.addEventListener('input',()=>{
   suggestTimer=setTimeout(async()=>{
     const pattern=q.replace(/[%_\\]/g,'').split(/\s+/).join('%');
     if(!pattern)return;
-    const {data,error}=await client.from('offers').select('name').ilike('name','%'+pattern+'%').limit(50);
+    const {data,error}=await client.rpc('suggest_products_v1',{q});
     if(version!==suggestVersion||error||$('app').hidden)return;
     for(const name of [...new Set(data.map(x=>x.name))].slice(0,8)){
       const b=node('button',name,suggestionBox);b.type='button';b.style.display='block';b.style.width='100%';b.style.textAlign='left';
@@ -34,6 +34,7 @@ $('searchForm').onsubmit=async e=>{
   try{
     const q=qInput.value.trim();if(!q)return;
     status('Søker i produktindeksen …');
+    const tracked=await client.rpc('touch_search_v1',{q});if(tracked.error)throw tracked.error;
     const {data,error}=await client.rpc('search_offers_v1',{q,max_results:100});
     if(error)throw error;if(version!==searchVersion||$('app').hidden)return;
     const root=$('results');root.replaceChildren();
@@ -43,11 +44,12 @@ $('searchForm').onsubmit=async e=>{
       node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),card);link(card,r.url,'Åpne butikk');
     }
     if(!data.length){
-      const requestButton=node('button','Bestill prioritert prissøk',root);requestButton.type='button';requestButton.onclick=async()=>{requestButton.disabled=true;const result=await client.rpc('request_search_v1',{q});if(result.error){status(result.error.message);requestButton.disabled=false}else{status('Søket er lagt i kø for neste crawlerkjøring. Ingen treff er garantert.');requestButton.textContent='Søk lagt i kø'}};
+      node('p','Søket er registrert for automatisk prisinnhenting.',root);
       node('p','Ingen indekserte treff. Dette betyr ikke at varen ikke selges. Crawleren må finne produktet først.',root);
       const b=node('button','Lagre som prisønske',root);b.type='button';b.onclick=()=>{$('watchQuery').value=q;$('target').focus()};
     }
-    status(data.length+' treff i indeksen. Ikke live-søk.');
+    status(data.length+' lagrede treff. '+(tracked.data.due?'Prisoppdatering er i kø.':'Prisene oppdateres etter planen.'));
+    if(tracked.data.due&&!adminPanel.hidden){try{await crawlerRequest('POST');if(version===searchVersion)status('Prisinnhenting startet. Søk på nytt etter kjøringen.')}catch(e){if(version===searchVersion)status('Søket er lagret i kø. '+e.message)}}
   }catch(e){if(version===searchVersion)fail(e)}
 };
 $('coupons').onclick=async()=>{const {data,error}=await client.from('coupons').select('*').order('checked',{ascending:false}).limit(100);if(error)return fail(error);const root=$('discounts');root.replaceChildren();for(const r of data){const c=node('article',r.host+' · '+r.code+' · '+r.status,root);node('small',r.context||'',c);link(c,r.source,'Kilde')}};
