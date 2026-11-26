@@ -43,6 +43,7 @@ $('searchForm').onsubmit=async e=>{
       node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),card);link(card,r.url,'Åpne butikk');
     }
     if(!data.length){
+      const requestButton=node('button','Bestill prioritert prissøk',root);requestButton.type='button';requestButton.onclick=async()=>{requestButton.disabled=true;const result=await client.rpc('request_search_v1',{q});if(result.error){status(result.error.message);requestButton.disabled=false}else{status('Søket er lagt i kø for neste crawlerkjøring. Ingen treff er garantert.');requestButton.textContent='Søk lagt i kø'}};
       node('p','Ingen indekserte treff. Dette betyr ikke at varen ikke selges. Crawleren må finne produktet først.',root);
       const b=node('button','Lagre som prisønske',root);b.type='button';b.onclick=()=>{$('watchQuery').value=q;$('target').focus()};
     }
@@ -71,12 +72,13 @@ async function refreshAdmin(){
  try{
   const [offers,coupons]=await Promise.all([client.from('offers').select('id',{count:'exact',head:true}),client.from('coupons').select('id',{count:'exact',head:true})]);
   adminInfo.textContent=(offers.error?'Ukjent':offers.count)+' produktoppføringer · '+(coupons.error?'ukjent':coupons.count)+' rabattkoder';
-  const data=await crawlerRequest('GET');runInfo.textContent=data.active?'Crawleren er i gang eller i kø.':'Ingen aktiv kjøring.';
+  const reports=await client.from('crawl_reports').select('host,pages,offers,detail,created').order('created',{ascending:false}).limit(8);const data=await crawlerRequest('GET');runInfo.textContent=data.active?'Crawleren er i gang eller i kø.':'Ingen aktiv kjøring.';
   runList.replaceChildren();
   for(const r of data.runs.slice(0,5)){
    const row=node('p',new Date(r.created_at).toLocaleString('nb-NO')+' · '+(r.conclusion||r.status),runList);
    link(row,'https://github.com/tebendheim/Prisradar/actions/runs/'+r.id,'  Logg');
   }
+  if(!reports.error){for(const report of reports.data)node('p',report.host+' · '+report.pages+' sider · '+report.offers+' tilbud · '+report.detail,runList)}
   startButton.disabled=data.active;
  }catch(e){runInfo.textContent='Statusfeil: '+e.message;startButton.disabled=false}
  finally{adminBusy=false;refreshButton.disabled=false}
