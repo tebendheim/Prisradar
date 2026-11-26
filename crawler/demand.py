@@ -4,6 +4,8 @@ from durable import db,discover,stamp,words
 from crawl import fetch,UA,extract,send,error_detail
 from product_parser import Page,walk,types
 from sources import microdata
+from store_search import search_url,links
+import socket,ipaddress
 
 def matches(text,q):
     terms=words(q)
@@ -15,7 +17,8 @@ def run():
     jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"next_check.asc","limit":"1"})
     if not jobs:
         print("No active searches due");return
-    job=jobs[0];q=job["query"];hosts=[x.strip() for x in open("crawler/stores.txt") if x.strip() and not x.startswith("#")]
+    job=jobs[0];q=job["query"];stores=db("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until","limit":"500"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc)};hosts=list(config)
+    if not hosts: print("No enabled stores available");return
     offset=int(os.environ.get("GITHUB_RUN_ID","0"))%len(hosts)
     hosts=hosts[offset:]+hosts[:offset]
     budget=min(65,int(os.environ.get("PAGE_BUDGET","60")))
@@ -24,6 +27,7 @@ def run():
         if budget<3:break
         count=0;found=0;detail="ok"
         try:
+            if not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)):raise ValueError("nonpublic store address")
             budget-=1
             raw=fetch("https://"+host+"/robots.txt",host)
             rp=urllib.robotparser.RobotFileParser();rp.parse(raw.decode("utf8","replace").splitlines())
@@ -35,6 +39,13 @@ def run():
             # PostgREST AND filters; terms are alphanumeric.
             params.extend(("url","ilike.*"+t+"*") for t in terms[:8])
             candidates={x["url"] for x in db("crawl_pages",params)}
+            if config[host]["search_path"] and budget>2:
+                u=search_url(host,config[host]["search_path"],q)
+                if rp.can_fetch(UA,u):
+                    budget-=1
+                    try:candidates.update(links(fetch(u,host,rp),u,host,q))
+                    except urllib.error.HTTPError as e:
+                        if e.code in (403,429):raise
             if not candidates:
                 allowance=[min(5,max(0,budget-2))]
                 before=allowance[0];pages=discover(host,rp,allowance);budget-=before-allowance[0]
@@ -57,13 +68,14 @@ def run():
                     for o in offers:
                         rows=db("offers",{"url":"eq."+u,"name":"eq."+o["name"],"select":"id"})
                         if rows:db("search_offer_links",{"on_conflict":"query,offer_id"},"POST",[{"query":q,"offer_id":r["id"]} for r in rows],"resolution=ignore-duplicates,return=minimal")
-                        db("product_catalog",{"on_conflict":"name"},"POST",[{"name":o["name"],"source":u}],"resolution=ignore-duplicates,return=minimal")
+                        db("product_catalog",{"on_conflict":"name"},"POST",[{"name":o["name"],"source":u}],"resolution=merge-duplicates,return=minimal")
                     found+=len(offers);total+=len(offers)
                 except urllib.error.HTTPError as e:
                     if e.code in (403,429):detail=error_detail(e);break
                     detail=error_detail(e)
         except Exception as e:detail=error_detail(e)
         finally:
+            if detail in ("HTTP 403","HTTP 429"):db("managed_stores",{"host":"eq."+host},"PATCH",{"paused_until":stamp(1)},"return=minimal")
             db("crawl_reports",None,"POST",{"host":host,"pages":count,"offers":found,"detail":detail},"return=minimal")
             print(host,count,found,detail,flush=True)
     db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(1 if total else 0.25)},"return=minimal")
