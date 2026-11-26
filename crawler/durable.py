@@ -1,7 +1,8 @@
 """Durable crawling, using the existing bounded network and product parser."""
 import os,re,json,urllib.request,urllib.parse,time,datetime
 from crawl import fetch,opener,UA,error_detail,extract,coupon_extract,send
-from product_parser import product_hint
+from product_parser import product_hint,Page,walk,types
+from sources import microdata,candidate_hosts
 import urllib.robotparser,urllib.error,xml.etree.ElementTree as ET
 from collections import deque
 def stamp(days=0):
@@ -76,6 +77,12 @@ def run():
                 local[0]-=1;count+=1;outcome="no structured offer"
                 try:
                     raw=fetch(u,host,rp);offers=list(extract(raw,u,host))
+                    if not offers:
+                        p=Page();p.feed(raw.decode("utf8","replace"))
+                        if not any("Product" in types(x) for x in walk(p.scripts)):
+                            offers=microdata(raw,u,host,stamp())
+                    candidates=candidate_hosts(raw,u)
+                    if candidates:db("store_candidates",{"on_conflict":"host"},"POST",[{"host":h,"source":u} for h in candidates],"resolution=ignore-duplicates,return=minimal")
                     if offers:
                         send("offers",offers,"url,name");found_count+=len(offers);total+=len(offers);outcome="offer"
                     coupons=list(coupon_extract(raw,host,u))
