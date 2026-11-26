@@ -22,9 +22,10 @@ export async function onRequest({request,env}){
  const active=runs.some(x=>x.status!=='completed');
  if(method==='GET')return json({active,runs:runs.map(x=>({id:x.id,status:x.status,conclusion:x.conclusion,created_at:x.created_at,updated_at:x.updated_at}))});
  if(active)return json({error:'Crawleren kjører allerede'},409);
- const reservation=await fetch(env.SUPABASE_URL+'/rest/v1/rpc/reserve_crawl_v1',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:'{}'});
+ let extra=false;try{const body=await request.json();extra=body.extra===true}catch{}
+ const reservation=await fetch(env.SUPABASE_URL+'/rest/v1/rpc/reserve_crawl_v2',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({extra})});
  if(!reservation.ok)return json({error:'Kjør SQL-migreringen for crawlerstyring først'},503);
- if(await reservation.json()!==true)return json({error:'Kjørekvote: maks 10 manuelle starter per 24 timer, 120 per 30 dager og minst ett minutt mellom forsøk (forutsetter ny SQL-migrering)'},429);
+ if(await reservation.json()!==true)return json({error:'Kjørekvote nådd eller ett minutts ventetid. Se kvoteoversikten.'},429);
  const d=await fetch(repo+'/dispatches',{method:'POST',headers:{...gh,'Content-Type':'application/json'},body:JSON.stringify({ref:'main'})});
  if(!d.ok)return json({error:'GitHub avviste starten',github_status:d.status},502);
  return json({accepted:true},202);
