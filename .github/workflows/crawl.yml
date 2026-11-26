@@ -22,11 +22,11 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          PAGE_BUDGET: '40'
+          PAGE_BUDGET: '60'
         run: |
           if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
             echo 'Supabase secrets not configured'
             exit 1
           fi
           export STORE_OFFSET=$(date +%j)
-          python crawler/durable.py
+          python crawler/demand.py
