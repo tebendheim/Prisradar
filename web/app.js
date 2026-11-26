@@ -57,15 +57,17 @@ node('h2','Crawler og produktindeks',adminPanel);
 const adminInfo=node('p','',adminPanel), runInfo=node('p','',adminPanel);
 const startButton=node('button','Start indeksering',adminPanel);
 const refreshButton=node('button','Oppdater status',adminPanel);
+startButton.type=refreshButton.type='button';runInfo.setAttribute('role','status');runInfo.setAttribute('aria-live','polite');
 const runList=node('div','',adminPanel);
 let adminBusy=false;
 async function crawlerRequest(method){
  const {data}=await client.auth.getSession();if(!data.session)throw Error('Logg inn på nytt');
- const r=await fetch('/api/crawler',{method,headers:{Authorization:'Bearer '+data.session.access_token},cache:'no-store'});
- const body=await r.json();if(!r.ok)throw Error(body.error||'Backendfeil');return body;
+ const r=await fetch('/api/crawler',{method,headers:{Authorization:'Bearer '+data.session.access_token},cache:'no-store',signal:AbortSignal.timeout(20000)});
+ let body;try{body=await r.json()}catch{throw Error('Crawler-API svarte ikke med JSON (HTTP '+r.status+'). Kontroller Cloudflare-publiseringen.')}if(!r.ok)throw Error((body.error||'Backendfeil')+(body.github_status?' (GitHub HTTP '+body.github_status+')':''));return body;
 }
 async function refreshAdmin(){
  if(adminBusy)return;adminBusy=true;startButton.disabled=true;refreshButton.disabled=true;
+ runInfo.textContent='Henter crawlerstatus …';
  try{
   const [offers,coupons]=await Promise.all([client.from('offers').select('id',{count:'exact',head:true}),client.from('coupons').select('id',{count:'exact',head:true})]);
   adminInfo.textContent=(offers.error?'Ukjent':offers.count)+' produktoppføringer · '+(coupons.error?'ukjent':coupons.count)+' rabattkoder';
@@ -76,13 +78,16 @@ async function refreshAdmin(){
    link(row,'https://github.com/tebendheim/Prisradar/actions/runs/'+r.id,'  Logg');
   }
   startButton.disabled=data.active;
- }catch(e){runInfo.textContent=e.message;startButton.disabled=true}
+ }catch(e){runInfo.textContent='Statusfeil: '+e.message;startButton.disabled=false}
  finally{adminBusy=false;refreshButton.disabled=false}
 }
 startButton.onclick=async()=>{if(adminBusy)return;adminBusy=true;startButton.disabled=true;refreshButton.disabled=true;
- try{await crawlerRequest('POST');runInfo.textContent='Startforespørsel akseptert. Oppdater status for å følge kjøringen.'}
- catch(e){runInfo.textContent=e.message}
- finally{adminBusy=false;refreshButton.disabled=false}
+ runInfo.textContent='Sender startforespørsel til GitHub …';startButton.textContent='Starter …';
+ let accepted=false;
+ try{await crawlerRequest('POST');accepted=true;runInfo.textContent='Startforespørsel akseptert. Henter status …'}
+ catch(e){runInfo.textContent='Kunne ikke starte: '+e.message}
+ finally{adminBusy=false;refreshButton.disabled=false;startButton.textContent='Start indeksering';startButton.disabled=accepted}
+ if(accepted)setTimeout(refreshAdmin,3000)
 };
 refreshButton.onclick=refreshAdmin;
 const {data}=await client.auth.getSession();await session(data.session);client.auth.onAuthStateChange((event)=>{if(event==='SIGNED_OUT'){ adminPanel.hidden=true; $('app').hidden=true;$('login').hidden=false;for(const id of ['results','discounts','watches'])$(id).replaceChildren()}});
