@@ -16,10 +16,13 @@ $('logout').onclick=async()=>{clearSuggestions();searchVersion++;await client.au
 const qInput=$('q'), suggestionBox=document.createElement('div');
 suggestionBox.id='suggestions';suggestionBox.setAttribute('aria-label','Produktforslag');
 qInput.parentElement.append(suggestionBox);
-let suggestTimer, suggestVersion=0, searchVersion=0;
+let suggestTimer, suggestVersion=0, searchVersion=0, selectedModel=null;
+async function models(q){const {data,error}=await client.rpc('suggest_products_v1',{q});if(error)throw error;return [...new Set((data||[]).map(x=>x.name))]}
+function chooseModel(name){selectedModel=name;qInput.value=name;clearSuggestions();$('searchForm').requestSubmit()}
+function renderModels(names,q){const root=$('results');root.replaceChildren();$('resultCount').textContent=names.length+' modeller';node('h3','Velg produktmodell',root);for(const name of names){const card=node('article','',root);const b=node('button',name,card);b.type='button';b.className='model-choice';b.onclick=()=>chooseModel(name)}const b=node('button','Søk etter priser på «'+q+'» likevel',root);b.type='button';b.className='quiet';b.onclick=()=>chooseModel(q)}
 function clearSuggestions(){clearTimeout(suggestTimer);suggestVersion++;suggestionBox.replaceChildren()}
 qInput.addEventListener('input',()=>{
-  clearSuggestions(); const q=qInput.value.trim(), version=suggestVersion;
+  selectedModel=null;clearSuggestions(); const q=qInput.value.trim(), version=suggestVersion;
   if(q.length<2)return;
   suggestTimer=setTimeout(async()=>{
     const pattern=q.replace(/[%_\\]/g,'').split(/\s+/).join('%');
@@ -28,7 +31,7 @@ qInput.addEventListener('input',()=>{
     if(version!==suggestVersion||error||$('app').hidden)return;
     for(const name of [...new Set(data.map(x=>x.name))].slice(0,8)){
       const b=node('button',name,suggestionBox);b.type='button';b.style.display='block';b.style.width='100%';b.style.textAlign='left';
-      b.onclick=()=>{qInput.value=name;clearSuggestions();$('searchForm').requestSubmit()};
+      b.onclick=()=>chooseModel(name);
     }
   },300);
 });
@@ -58,7 +61,9 @@ $('searchForm').onsubmit=async e=>{
  e.preventDefault();clearSuggestions();clearTimeout(pollTimer);const version=++searchVersion;
  try{
   const q=qInput.value.trim();if(!q)return;
-  status('Søker …');
+  status('Finner produktmodeller …');
+  if(selectedModel!==q){const names=await models(q);if(version!==searchVersion||$('app').hidden)return;if(names.length){renderModels(names,q);status('Velg modellen du vil sammenligne priser på.');return}}
+  selectedModel=null;status('Henter priser …');
   const tracked=await client.rpc('touch_search_v1',{q});if(tracked.error)throw tracked.error;
   const [offers,progress]=await Promise.all([client.rpc('search_offers_v1',{q,max_results:100}),client.rpc('search_progress_v1',{q})]);
   if(version!==searchVersion||$('app').hidden)return;
@@ -68,7 +73,7 @@ $('searchForm').onsubmit=async e=>{
   if(tracked.data.due){
    const previous=progress.data?.last_attempt;
    let notice='Venter på crawleren …';
-   if(isAdmin){try{await crawlerRequest('POST');notice='Prisinnhenting startet …'}catch(e){notice='Søket beholdes i kø: '+e.message}}
+   if(isAdmin){try{await crawlerRequest('POST');notice='Prisinnhenting startet …'}catch(e){notice=e.message.includes('allerede')?'En annen prisinnhenting pågår. Ditt søk er i kø.':'Søket beholdes i kø: '+e.message}}
    if(version===searchVersion)pollResults(q,version,Date.now()+9*60*1000,previous,notice);
   }
  }catch(e){if(version===searchVersion)fail(e)}
