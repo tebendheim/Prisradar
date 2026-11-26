@@ -22,6 +22,9 @@ def run():
     for _ in range(3):
         if time.monotonic()>deadline-35:break
         if not process_one(deadline):break
+    if time.monotonic()<deadline-45:
+        from catalog_discovery import run as discover_catalog
+        discover_catalog(deadline=deadline,budget=30)
 
 def process_one(deadline):
     jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":"1"})
