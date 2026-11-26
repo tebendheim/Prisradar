@@ -57,16 +57,19 @@ def run():
     hosts=[x.strip() for x in open("crawler/stores.txt") if x.strip() and not x.startswith("#")]
     offset=int(os.environ.get("STORE_OFFSET","0"))%len(hosts)
     budget=min(80,max(1,int(os.environ.get("PAGE_BUDGET","40"))))
+    remaining_stores=min(4,len(hosts))
     offers=[];coupons=[]
     for host in (hosts[offset:]+hosts[:offset])[:4]:
         if budget<=0:break
+        store_floor=max(0,budget-max(1,budget//remaining_stores))
+        remaining_stores-=1
         root="https://"+host
         try:
             raw=fetch(root+"/robots.txt",host);rp=urllib.robotparser.RobotFileParser();rp.parse(raw.decode("utf8","replace").splitlines())
             if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):
                 print(host,"skipped: robots rate limit");continue
             maps=deque(rp.site_maps() or [root+"/sitemap.xml"]);seen=set();pages=deque();maps_read=0
-            while maps and maps_read<10 and budget>0 and len(pages)<12000:
+            while maps and maps_read<10 and budget>store_floor+3 and len(pages)<12000:
                 url=maps.popleft()
                 if url in seen or not rp.can_fetch(UA,url):continue
                 seen.add(url);maps_read+=1;budget-=1
@@ -84,7 +87,7 @@ def run():
                 except Exception as e:
                     print(host,"map skipped",error_detail(e))
                     if isinstance(e,urllib.error.HTTPError) and e.code in (403,429):raise
-            if rp.can_fetch(UA,root+"/") and budget>0:
+            if rp.can_fetch(UA,root+"/") and budget>store_floor+2:
                 budget-=1
                 try:coupons.extend(coupon_extract(fetch(root+"/",host,rp),host,root+"/"))
                 except urllib.error.HTTPError as e:
@@ -94,7 +97,7 @@ def run():
             candidates=list(set(pages)); candidates.sort(); random.Random(int(os.environ.get("GITHUB_RUN_ID","0"))).shuffle(candidates)
             pages=deque(sorted(candidates,key=lambda u:(not product_hint(u),bool(re.search(r"/kategori/|/category/|/brand/|/merke/",u,re.I)))))
             count=0
-            while pages and budget>0 and count<15:
+            while pages and budget>store_floor and count<15:
                 url=pages.popleft()
                 if url in seen or not rp.can_fetch(UA,url):continue
                 seen.add(url);budget-=1;count+=1
