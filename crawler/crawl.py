@@ -1,5 +1,5 @@
 """Bounded, allowlisted crawl. No browser bypass, no paid search API."""
-import os,json,time,re,urllib.request,urllib.parse,urllib.robotparser,xml.etree.ElementTree as ET
+import os,json,time,re,gzip,io,urllib.request,urllib.error,urllib.parse,urllib.robotparser,xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from collections import deque
 UA="PrisRadar/4.0 (private price research)"
@@ -13,7 +13,13 @@ def fetch(url,host):
     with opener.open(urllib.request.Request(url,headers={"User-Agent":UA}),timeout=12) as r:
         raw=r.read(2000001)
         if len(raw)>2000000: raise ValueError("response too large")
+        if raw.startswith(b'\x1f\x8b'):
+            with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
+                raw=stream.read(2000001)
+            if len(raw)>2000000: raise ValueError("decompressed response too large")
         return raw
+def error_detail(e):
+    return "HTTP "+str(e.code) if isinstance(e,urllib.error.HTTPError) else type(e).__name__
 class ProductHTML(HTMLParser):
     def __init__(self): super().__init__();self.active=False;self.parts=[];self.data=[]
     def handle_starttag(self,t,a):
@@ -80,7 +86,8 @@ def run():
         root="https://"+host
         try:
             raw=fetch(root+"/robots.txt",host);rp=urllib.robotparser.RobotFileParser();rp.parse(raw.decode("utf8","replace").splitlines())
-            if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):continue
+            if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):
+                print(host,"skipped: robots rate limit");continue
             maps=deque(rp.site_maps() or [root+"/sitemap.xml"]);seen=set();pages=deque();maps_read=0
             while maps and maps_read<8 and budget>0 and len(pages)<400:
                 url=maps.popleft()
@@ -90,20 +97,26 @@ def run():
                     tree=ET.fromstring(fetch(url,host))
                     locs=[n.text for n in tree.findall("./{*}*/{*}loc") if n.text]
                     if tree.tag.endswith("sitemapindex"):maps.extend(locs[:100])
-                    else:pages.extend(locs[:400])
-                except Exception as e:print(host,"map skipped",type(e).__name__)
+                    else:
+                        locs=[u for u in locs if urllib.parse.urlsplit(u).hostname==host]
+                        locs.sort(key=lambda u: (not bool(re.search(r'airpods|headphone|hodetelefon',u,re.I)),not bool(re.search(r'produkt|product|/p/',u,re.I))))
+                        pages.extend(locs[:400])
+                    print(host,"sitemap",len(locs),"links")
+                except Exception as e:print(host,"map skipped",error_detail(e))
             if rp.can_fetch(UA,root+"/") and budget>0:
                 budget-=1
                 try:coupons.extend(coupon_extract(fetch(root+"/",host),host,root+"/"))
                 except Exception:pass
+            print(host,"candidate pages",len(pages))
             count=0
             while pages and budget>0 and count<15:
                 url=pages.popleft()
                 if url in seen or not rp.can_fetch(UA,url):continue
                 seen.add(url);budget-=1;count+=1
                 try:
-                    raw=fetch(url,host);offers.extend(extract(raw,url,host));coupons.extend(coupon_extract(raw,host,url))
-                except Exception as e:print(host,"page skipped",type(e).__name__)
-        except Exception as e:print(host,"store skipped",type(e).__name__)
+                    raw=fetch(url,host);found=list(extract(raw,url,host));offers.extend(found);coupons.extend(coupon_extract(raw,host,url));print(host,"page products",len(found))
+                except Exception as e:print(host,"page skipped",error_detail(e))
+        except Exception as e:print(host,"store skipped",error_detail(e))
     send("offers",offers,"url,name");send("coupons",coupons,"host,code,source");print("Offers:",len(offers),"Coupons:",len(coupons))
+    if not offers: print("::warning::No products indexed; inspect store diagnostics")
 if __name__=="__main__":run()
