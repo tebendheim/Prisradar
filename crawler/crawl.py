@@ -2,6 +2,8 @@
 import os,json,time,re,gzip,io,urllib.request,urllib.error,urllib.parse,urllib.robotparser,xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from collections import deque
+from product_parser import parse, product_hint
+import random
 UA="PrisRadar/4.0 (private price research)"
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs): return None
@@ -19,68 +21,17 @@ def fetch_once(url,host,robots=None):
     if robots is not None and (p.hostname!=host or not robots.can_fetch(UA,url)):raise ValueError("robots disallows URL")
     time.sleep(2)
     with opener.open(urllib.request.Request(url,headers={"User-Agent":UA}),timeout=12) as r:
-        raw=r.read(2000001)
-        if len(raw)>2000000: raise ValueError("response too large")
+        raw=r.read(12000001)
+        if len(raw)>12000000: raise ValueError("response too large")
         if raw.startswith(b'\x1f\x8b'):
             with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
-                raw=stream.read(2000001)
-            if len(raw)>2000000: raise ValueError("decompressed response too large")
+                raw=stream.read(12000001)
+            if len(raw)>12000000: raise ValueError("decompressed response too large")
         return raw
 def error_detail(e):
     return "HTTP "+str(e.code) if isinstance(e,urllib.error.HTTPError) else type(e).__name__
-class ProductHTML(HTMLParser):
-    def __init__(self): super().__init__();self.active=False;self.parts=[];self.data=[];self.meta={}
-    def handle_starttag(self,t,a):
-        a=dict(a)
-        if t=="meta" and a.get("content"):
-            k=a.get("property") or a.get("name") or a.get("itemprop")
-            if k:self.meta[k.lower()]=a["content"]
-        if t=="script" and a.get("type","").lower().split(";")[0].strip()=="application/ld+json": self.active=True;self.parts=[]
-    def handle_data(self,s):
-        if self.active:self.parts.append(s)
-    def handle_endtag(self,t):
-        if t=="script" and self.active:
-            self.active=False
-            try:self.data.append(json.loads("".join(self.parts)))
-            except ValueError:pass
-def walk(v):
-    if isinstance(v,dict):
-        yield v
-        for x in v.values():yield from walk(x)
-    elif isinstance(v,list):
-        for x in v:yield from walk(x)
-def parse_price(value):
-    if isinstance(value,str):
-        value=value.strip().replace("\\u00a0","").replace(" ","")
-        if "," in value:value=value.replace(".","").replace(",",".")
-    return float(value)
 def extract(raw,url,host):
-    found=False
-    p=ProductHTML();p.feed(raw.decode("utf8","replace"))
-    for item in walk(p.data):
-        typ=item.get("@type")
-        if isinstance(typ,str):typ=typ.rstrip("/").split("/")[-1]
-        if not (typ=="Product" or isinstance(typ,list) and "Product" in typ):continue
-        name=item.get("name")
-        if not isinstance(name,str) or not name:continue
-        offers=item.get("offers",[])
-        if isinstance(offers,dict):offers=[offers]
-        for o in offers:
-            if not isinstance(o,dict) or str(o.get("priceCurrency","")).upper()!="NOK" or o.get("price") is None:continue
-            try:
-                price=parse_price(o["price"])
-                if not 0<=price<=10000000:continue
-            except (ValueError,TypeError):continue
-            gtin=next((str(item[k]) for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if item.get(k)),None)
-            found=True
-            yield dict(url=url,name=name[:500],host=host,gtin=gtin,model=str(item.get("mpn") or item.get("model") or "")[:200],price=price,shipping=None,availability=str(o.get("availability","")).split("/")[-1],checked=time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()))
-            break
-    if not found:
-        m=p.meta;name=m.get("og:title") or m.get("name");price=m.get("product:price:amount") or m.get("og:price:amount");currency=m.get("product:price:currency") or m.get("og:price:currency")
-        if name and price and str(currency).upper()=="NOK":
-            try:amount=parse_price(price)
-            except (ValueError,TypeError):return
-            if 0<amount<=10000000:yield dict(url=url,name=name[:500],host=host,gtin=None,model="",price=amount,shipping=None,availability=m.get("product:availability",""),checked=time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()))
+    yield from parse(raw,url,host,time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()))
 def coupon_extract(raw,host,url):
     class Visible(HTMLParser):
         def __init__(self):super().__init__();self.hidden=0;self.parts=[]
@@ -115,7 +66,7 @@ def run():
             if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):
                 print(host,"skipped: robots rate limit");continue
             maps=deque(rp.site_maps() or [root+"/sitemap.xml"]);seen=set();pages=deque();maps_read=0
-            while maps and maps_read<8 and budget>0 and len(pages)<400:
+            while maps and maps_read<10 and budget>0 and len(pages)<12000:
                 url=maps.popleft()
                 if url in seen or not rp.can_fetch(UA,url):continue
                 seen.add(url);maps_read+=1;budget-=1
@@ -128,7 +79,7 @@ def run():
                     else:
                         locs=[u for u in locs if urllib.parse.urlsplit(u).hostname==host]
                         locs.sort(key=lambda u: (not bool(re.search(r'airpods|headphone|hodetelefon',u,re.I)),not bool(re.search(r'produkt|product|/p/',u,re.I))))
-                        pages.extend(locs[:400])
+                        pages.extend(locs[:12000])
                     print(host,"sitemap",len(locs),"links")
                 except Exception as e:
                     print(host,"map skipped",error_detail(e))
@@ -136,9 +87,12 @@ def run():
             if rp.can_fetch(UA,root+"/") and budget>0:
                 budget-=1
                 try:coupons.extend(coupon_extract(fetch(root+"/",host,rp),host,root+"/"))
+                except urllib.error.HTTPError as e:
+                    if e.code in (403,429):raise
                 except Exception:pass
             print(host,"candidate pages",len(pages))
-            pages=deque(sorted(set(pages),key=lambda u:(not bool(re.search(r"airpods",u,re.I)),not bool(re.search(r"/product/|/produkt/|/p/|/product-|/p-?|/produkt-",u,re.I)))))
+            candidates=list(set(pages)); candidates.sort(); random.Random(int(os.environ.get("GITHUB_RUN_ID","0"))).shuffle(candidates)
+            pages=deque(sorted(candidates,key=lambda u:(not product_hint(u),bool(re.search(r"/kategori/|/category/|/brand/|/merke/",u,re.I)))))
             count=0
             while pages and budget>0 and count<15:
                 url=pages.popleft()
