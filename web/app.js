@@ -59,15 +59,16 @@ const adminInfo=node('p','',adminPanel), runInfo=node('p','',adminPanel);
 const startButton=node('button','Start indeksering',adminPanel);
 const refreshButton=node('button','Oppdater status',adminPanel);
 startButton.type=refreshButton.type='button';runInfo.setAttribute('role','status');runInfo.setAttribute('aria-live','polite');
-const runList=node('div','',adminPanel);
+const quotaPanel=node('section','',adminPanel);node('h3','Kjørekvote',quotaPanel);const quotaInfo=node('p','Henter kvote …',quotaPanel);const extraButton=node('button','Start ekstra kjøring',quotaPanel);extraButton.type='button';extraButton.disabled=true;node('small','Interne grenser, ikke GitHubs faktiske faktureringssaldo. Ekstra kjøringer bruker samme 30-dagerskvote.',quotaPanel);link(quotaPanel,'https://github.com/settings/billing','Se faktisk GitHub-forbruk');const runList=node('div','',adminPanel);
+async function refreshQuota(){const {data,error}=await client.rpc('crawl_quota_status_v1');if(error){quotaInfo.textContent='Kvoteoversikt utilgjengelig: '+error.message;return null}quotaInfo.textContent='Siste 24 timer: '+data.used_day+' starter. Ordinære igjen: '+data.normal_remaining+'. Ekstra igjen: '+data.extra_remaining+'. Siste 30 dager: '+data.used_30d+' av '+data.manual_cap+' starter. Anslått maksimalt manuelt forbruk: '+data.estimated_max_minutes_30d+' minutter. Tidligste mulige ekstra start: '+new Date(data.next_start).toLocaleString('nb-NO');return data}
 let adminBusy=false;
-async function crawlerRequest(method){
+async function crawlerRequest(method,extra=false){
  const {data}=await client.auth.getSession();if(!data.session)throw Error('Logg inn på nytt');
- const r=await fetch('/api/crawler',{method,headers:{Authorization:'Bearer '+data.session.access_token},cache:'no-store',signal:AbortSignal.timeout(20000)});
+ const r=await fetch('/api/crawler',{method,headers:{Authorization:'Bearer '+data.session.access_token,...(method==='POST'?{'Content-Type':'application/json'}:{})},...(method==='POST'?{body:JSON.stringify({extra})}:{}),cache:'no-store',signal:AbortSignal.timeout(20000)});
  let body;try{body=await r.json()}catch{throw Error('Crawler-API svarte ikke med JSON (HTTP '+r.status+'). Kontroller Cloudflare-publiseringen.')}if(!r.ok)throw Error((body.error||'Backendfeil')+(body.github_status?' (GitHub HTTP '+body.github_status+')':''));return body;
 }
 async function refreshAdmin(){
- if(adminBusy)return;adminBusy=true;startButton.disabled=true;refreshButton.disabled=true;
+ if(adminBusy)return;adminBusy=true;startButton.disabled=true;extraButton.disabled=true;refreshButton.disabled=true;
  runInfo.textContent='Henter crawlerstatus …';
  try{
   const [offers,coupons]=await Promise.all([client.from('offers').select('id',{count:'exact',head:true}),client.from('coupons').select('id',{count:'exact',head:true})]);
@@ -79,17 +80,20 @@ async function refreshAdmin(){
    link(row,'https://github.com/tebendheim/Prisradar/actions/runs/'+r.id,'  Logg');
   }
   if(!reports.error){for(const report of reports.data)node('p',report.host+' · '+report.pages+' sider · '+report.offers+' tilbud · '+report.detail,runList)}
-  startButton.disabled=data.active;
+  const quota=await refreshQuota();
+  startButton.disabled=data.active||!!(quota&&quota.normal_remaining===0);
+  extraButton.disabled=data.active||!quota||quota.extra_remaining===0;
  }catch(e){runInfo.textContent='Statusfeil: '+e.message;startButton.disabled=false}
  finally{adminBusy=false;refreshButton.disabled=false}
 }
-startButton.onclick=async()=>{if(adminBusy)return;adminBusy=true;startButton.disabled=true;refreshButton.disabled=true;
+async function startCrawler(extra=false){if(adminBusy)return;adminBusy=true;startButton.disabled=true;extraButton.disabled=true;refreshButton.disabled=true;
  runInfo.textContent='Sender startforespørsel til GitHub …';startButton.textContent='Starter …';
  let accepted=false;
- try{await crawlerRequest('POST');accepted=true;runInfo.textContent='Startforespørsel akseptert. Henter status …'}
+ try{await crawlerRequest('POST',extra);accepted=true;runInfo.textContent='Startforespørsel akseptert. Henter status …'}
  catch(e){runInfo.textContent='Kunne ikke starte: '+e.message}
  finally{adminBusy=false;refreshButton.disabled=false;startButton.textContent='Start indeksering';startButton.disabled=accepted}
- if(accepted)setTimeout(refreshAdmin,3000)
-};
+ if(accepted)setTimeout(refreshAdmin,3000);else{const quota=await refreshQuota();extraButton.disabled=!quota||quota.extra_remaining===0;startButton.disabled=!!(quota&&quota.normal_remaining===0)}
+}
+startButton.onclick=()=>startCrawler(false);extraButton.onclick=()=>startCrawler(true);
 refreshButton.onclick=refreshAdmin;
 const {data}=await client.auth.getSession();await session(data.session);client.auth.onAuthStateChange((event)=>{if(event==='SIGNED_OUT'){ adminPanel.hidden=true; $('app').hidden=true;$('login').hidden=false;for(const id of ['results','discounts','watches'])$(id).replaceChildren()}});
