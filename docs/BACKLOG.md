@@ -22,10 +22,10 @@ Prisjakt har tusenvis av butikker, åpent søk uten innlogging, produktsider med
 9. (Stor, egen sprint, krever brukerens godkjenning av nøkkel i Cloudflare) Live-søk i Cloudflare Function mot butikker med verifisert JSON-søk, robots-status fra Supabase og takt per butikk. Det gir størst fartsgevinst og bruker null Actions-minutter.
 
 ## Pågår
-- A. Raskere butikkoppdagelse (implementerer)
-- B. Høyere treffrate via plattform-API-er (implementerer)
 
 ## Ferdig
+- 2026-11-27 A: Parallell, tidsstyrt butikkoppdagelse (fra 4 til 150+ kandidater per kjøring), 58 kuraterte norske butikker, kandidater fra lenker (maks 10 aktiveringer per kjøring), eksakt butikktak, felles klokke i `discovery_job.py`
+- 2026-11-27 B: Plattformdeteksjon og søk (Shopify, WooCommerce, Magento, Squarespace, SearchAction/OpenSearch), slug-lenker, modellnummer-matching, filter for brukt/demo/tilbehør. API-er gir bare URL-er, og prisen verifiseres alltid via produktsidens JSON-LD i NOK
 - 2026-11-27 Mer arbeid per Actions-minutt: tidlig avslutning når det ikke er noe å gjøre, tidsstyrt søkeløkke (390 s), lås per host (12 tråder, aldri parallelt mot samme butikk), 20 butikker per katalogkjøring
 - 2026-11-27 `DRY_RUN=1`: crawleren henter og parser, men alle skrivinger til Supabase blokkeres og logges uten hemmeligheter
 - 2026-11-27 Butikktaket hevet fra 500 til 2000 (`MAX_STORES`), og butikklister leses med paginering (`db_all`) forbi PostgREST-grensen på 1000 rader
