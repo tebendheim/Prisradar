@@ -127,7 +127,8 @@ def parse(raw,url,host,checked):
         in_stock=[c for c in candidates if c[1]=="InStock" and not c[2]]
         val,availability,aggregate=min(in_stock or candidates,key=lambda c:c[0])
         kind="from" if len(set(candidates))>1 or aggregate else "exact"
-        results.append(dict(url=url,name=name.strip()[:500],host=host,gtin=None if len(set(candidates))>1 or aggregate else next((g for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if (g:=gtin(item.get(k)))),None),model=str(item.get("mpn") or item.get("model") or "")[:200],price=val,price_kind=kind,shipping=None,availability=availability,checked=checked))
+        brand=item.get("brand");brand=brand.get("name") if isinstance(brand,dict) else brand
+        results.append(dict(brand=brand[:200] if isinstance(brand,str) else None,mpn=item.get("mpn")[:200] if kind=="exact" and isinstance(item.get("mpn"),str) else None,url=url,name=name.strip()[:500],host=host,gtin=None if len(set(candidates))>1 or aggregate else next((g for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if (g:=gtin(item.get(k)))),None),model=str(item.get("mpn") or item.get("model") or "")[:200],price=val,price_kind=kind,shipping=None,availability=availability,checked=checked))
     if results:return results
     # Do not use metadata to override ambiguous or used structured offers.
     if products or any("Product" in types(x) for x in objects):return []
