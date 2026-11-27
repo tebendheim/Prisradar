@@ -5,6 +5,7 @@ from crawl import fetch,UA,error_detail
 from product_parser import Page,walk,types,same_page,gtin,product_hint
 from merchant_feed import parse_feed,learn_assortment
 from sources import candidate_hosts
+from discover_settings import discover_paths
 
 def names(raw,url):
     p=Page();p.feed(raw.decode("utf8","replace"))
@@ -54,7 +55,7 @@ def run(deadline=None,budget=45):
     size=db("rpc/catalog_capacity_v1",None,"POST",{})
     if not size["allowed"]:
         print("Catalogue storage guard reached");return
-    stores=db("managed_stores",{"enabled":"eq.true","select":"host,paused_until,feed_path","limit":"500","order":"host.asc"})
+    stores=db("managed_stores",{"enabled":"eq.true","select":"host,paused_until,feed_path,search_path","limit":"500","order":"host.asc"})
     now=datetime.datetime.now(datetime.timezone.utc)
     stores=[s for s in stores if not s["paused_until"] or datetime.datetime.fromisoformat(s["paused_until"])<=now]
     if not stores:return
@@ -79,6 +80,21 @@ def run(deadline=None,budget=45):
                 budget-=1
                 try:
                     raw=fetch("https://"+h+"/",h,rp);found+=learn_batch(list_names(raw,"https://"+h+"/"),h)
+                    path,feeds=discover_paths(raw,"https://"+h+"/")
+                    patch={}
+                    if path and not s.get("search_path") and rp.can_fetch(UA,"https://"+h+path.replace("{q}","test")):patch["search_path"]=path
+                    if not s.get("feed_path"):
+                        for f in feeds:
+                            if budget<3 or time.monotonic()>deadline-40:break
+                            if not rp.can_fetch(UA,"https://"+h+f):continue
+                            budget-=1
+                            try:
+                                items=list(parse_feed(fetch("https://"+h+f,h,rp),"https://"+h+f))[:1000]
+                                if items:found+=learn_batch(items,h);patch["feed_path"]=f;break
+                            except urllib.error.HTTPError as e:
+                                if e.code in (403,429):raise
+                            except (ValueError,UnicodeError):pass
+                    if patch:db("managed_stores",{"host":"eq."+h},"PATCH",patch,"return=minimal")
                     candidates=[x for x in candidate_hosts(raw,"https://"+h+"/") if x.removeprefix("www.")!=h.removeprefix("www.")]
                     if candidates:db("store_candidates",{"on_conflict":"host"},"POST",[{"host":x,"source":"https://"+h+"/"} for x in candidates],"resolution=ignore-duplicates,return=minimal")
                     from store_search import Anchors
