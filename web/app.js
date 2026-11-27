@@ -50,11 +50,31 @@ async function showCoverage(root,q,version){
  const details=node('details','',root);node('summary','Vis butikkstatus',details);
  for(const s of stores)node('p',s.host+' · '+({pending:'Venter',found:'Treff',no_offer:'Ingen dokumentert pris',incomplete:'Ufullstendig'}[s.status]||s.status)+(s.detail?' · '+s.detail:''),details);
 }
+function gtinKey(value){
+ const v=String(value??'');
+ if(!/^(?:[0-9]{8}|[0-9]{12,14})$/.test(v)||!/[1-9]/.test(v))return null;
+ const digits=[...v].reverse().map(Number);
+ if(digits.reduce((n,d,i)=>n+d*(i%2?3:1),0)%10)return null;
+ return v.padStart(14,'0');
+}
+function groupOffers(rows){
+ const groups=new Map();
+ for(const r of rows){
+  const g=gtinKey(r.gtin);
+  const label=r.name.trim().replace(/\s+/g,' ');
+  const key=g?'gtin:'+g:'name:'+label.toLowerCase()+':'+(r.price_kind||'exact');
+  if(!groups.has(key))groups.set(key,{label,gtin:g,rows:[]});
+  groups.get(key).rows.push(r);
+ }
+ return [...groups.values()];
+}
 function renderOffers(data,q){
  const root=$('results');root.replaceChildren();$('resultCount').textContent=data.length+' treff';const coverage=node('section','',root);showCoverage(coverage,q,searchVersion);if(isAdmin){const b=node('button','Oppdater priser nå',coverage);b.type='button';b.onclick=async()=>{b.disabled=true;try{const r=await client.rpc('refresh_search_v1',{q});if(r.error)throw r.error;chooseModel(q)}catch(e){fail(e);b.disabled=false}}}
- for(const r of data){
-  const card=node('article','',root);card.className='offer';const info=node('div','',card);node('strong',r.name,info);node('small',r.host,info);node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),info);link(info,r.url,'Åpne butikk');const price=node('div','',card);const amount=node('div',new Intl.NumberFormat('nb-NO',{maximumFractionDigits:2}).format(r.total_price??r.price)+' kr',price);amount.className='offer-price';if(r.price_kind==='from')node('small','Fra-pris – variant må kontrolleres',price);node('small',r.shipping==null?'Frakt ukjent':'Inkl. frakt',price);
- }
+ const groups=groupOffers(data);$('resultCount').textContent=groups.length+' produktgrupper · '+data.length+' tilbud';
+ for(const g of groups){const section=node('section','',root);node('h3',g.label,section);node('small',(g.gtin?'GTIN '+g.gtin+' · ':'Navnebasert gruppe, identitet ikke bekreftet · ')+new Set(g.rows.map(r=>r.host)).size+' butikker',section);
+ for(const r of g.rows){
+  const card=node('article','',section);card.className='offer';const info=node('div','',card);node('strong',r.name,info);node('small',r.host,info);node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),info);link(info,r.url,'Åpne butikk');const price=node('div','',card);const amount=node('div',new Intl.NumberFormat('nb-NO',{maximumFractionDigits:2}).format(r.total_price??r.price)+' kr',price);amount.className='offer-price';if(r.price_kind==='from')node('small','Fra-pris – variant må kontrolleres',price);node('small',r.shipping==null?'Frakt ukjent':'Inkl. frakt',price);
+ }}
  if(!data.length){node('p','Ingen dokumenterte treff ennå. Dette betyr ikke at varen ikke selges.',root);const b=node('button','Lagre som prisønske',root);b.type='button';b.onclick=()=>{showView('watches');$('watchQuery').value=q;$('target').focus()}}
 }
 let lastQueueCheck=0;
