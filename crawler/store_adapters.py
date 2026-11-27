@@ -52,3 +52,29 @@ def probe_candidates(deadline,limit=4):
             patch["probe_result"]=result
             db("store_candidates",{"host":"eq."+h},"PATCH",patch,"return=minimal")
             print("Candidate",h,result,flush=True)
+
+def public_search(host,adapter,q,rp,fetcher=fetch):
+    """Only documented public storefront search endpoints; return product URLs, not guessed prices."""
+    if adapter=="shopify":
+        path="/search/suggest.json?"+urllib.parse.urlencode({"q":q,"resources[type]":"product","resources[limit]":10})
+    elif adapter=="woocommerce":
+        path="/wp-json/wc/store/v1/products?"+urllib.parse.urlencode({"search":q,"per_page":10})
+    else:return []
+    url="https://"+host+path
+    if not rp.can_fetch(UA,url):return []
+    import json
+    try:
+        data=json.loads(fetcher(url,host,rp))
+        rows=data.get("resources",{}).get("results",{}).get("products",[]) if adapter=="shopify" else data
+        if not isinstance(rows,list):return []
+        result=[]
+        for row in rows[:10]:
+            if not isinstance(row,dict):continue
+            u=urllib.parse.urlsplit(urllib.parse.urljoin(url,row.get("url") or row.get("permalink") or ""))
+            if u.scheme=="https" and same_host(u.hostname,host) and not u.username and not u.password and u.port in (None,443) and u.path not in ("/",path) and rp.can_fetch(UA,u.geturl()):
+                result.append(u._replace(fragment="").geturl())
+        return list(dict.fromkeys(result))
+    except (ValueError,AttributeError,TypeError):return []
+    except urllib.error.HTTPError as e:
+        if e.code in (401,403,429):raise
+        return []
