@@ -83,16 +83,16 @@ def process_one(deadline):
     db("search_store_checks",{"on_conflict":"query,host"},"POST",[{"query":q,"host":h} for h in hosts],"resolution=ignore-duplicates,return=minimal")
     checks=db("search_store_checks",{"query":"eq."+q,"select":"host,next_check","limit":"500"})
     due={x["host"] for x in checks if datetime.datetime.fromisoformat(x["next_check"])<=datetime.datetime.now(datetime.timezone.utc)}
-    selected=[h for h in hosts if h in due][:48]
+    selected=[h for h in hosts if h in due][:min(48, max(1,int(os.environ.get("PAGE_BUDGET","60"))//2))]
     if not selected:
         db("active_searches",{"query":"eq."+q},"PATCH",{"next_check":stamp(0.08)},"return=minimal");return True
     budget=min(144,int(os.environ.get("PAGE_BUDGET","60"))*2)
     print("Ranked stores:",selected,flush=True)
     with ThreadPoolExecutor(max_workers=12) as pool:
-        results=list(pool.map(lambda h:process_store(h,q,config[h],evidence.get(h,[]),min(deadline,time.monotonic()+65),max(3,budget//len(selected))),selected))
+        results=list(pool.map(lambda h:process_store(h,q,config[h],evidence.get(h,[]),min(deadline,time.monotonic()+65),max(4,budget//len(selected))),selected))
     total=sum(results)
     print("Search metrics: selected stores",len(selected),"offers",total,"seconds remaining",round(deadline-time.monotonic()),flush=True)
-    db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(0.25 if total else 0.08)},"return=minimal")
+    db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(0.02 if len(due)>len(selected) else 0.25 if total else 0.08)},"return=minimal")
     print("Search:",q,"offers:",total,flush=True)
     return True
 
@@ -116,7 +116,7 @@ def process_store(host,q,config,prior,deadline,budget):
         if not candidates:candidates={x["url"] for x in db("crawl_pages",params)}
         known=[u for name,u in URLS if matches(name,q) and urllib.parse.urlsplit(u).hostname==host]
         candidates.update(known)
-        if not config["search_path"] and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
+        if not candidates and not config["search_path"] and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
             budget-=1
             detected=profile(fetch("https://"+host+"/",host,rp),"https://"+host+"/")
             path=detected["search_path"]
