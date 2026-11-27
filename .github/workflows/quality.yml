@@ -1,0 +1,32 @@
+name: Offline quality checks
+on:
+  push:
+    paths:
+      - 'crawler/**'
+      - 'functions/**'
+      - 'web/**'
+      - 'supabase/**'
+      - '.github/workflows/quality.yml'
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Adapter and integration tests
+        run: python -m unittest discover -s crawler -v
+      - name: JavaScript syntax
+        run: |
+          for f in web/app.js functions/api/crawler.js; do
+            node --input-type=module --check < "$f"
+          done
