@@ -45,6 +45,7 @@ async function showCoverage(root,q,version){
  if(version!==searchVersion||!root.isConnected)return;
  if(res.error){node('small','Butikkstatus utilgjengelig: '+res.error.message,root);return}
  const stores=res.data?.stores||[];const checked=stores.filter(s=>s.checked).length;
+ if(!stores.length){node('p','Søket venter på at crawleren skal opprette butikklisten.',root);return}
  node('p',checked+' av '+stores.length+' registrerte butikker forsøkt · '+stores.filter(s=>s.status==='found').length+' med treff',root);
  const details=node('details','',root);node('summary','Vis butikkstatus',details);
  for(const s of stores)node('p',s.host+' · '+({pending:'Venter',found:'Treff',no_offer:'Ingen dokumentert pris',incomplete:'Ufullstendig'}[s.status]||s.status)+(s.detail?' · '+s.detail:''),details);
@@ -56,6 +57,7 @@ function renderOffers(data,q){
  }
  if(!data.length){node('p','Ingen dokumenterte treff ennå. Dette betyr ikke at varen ikke selges.',root);const b=node('button','Lagre som prisønske',root);b.type='button';b.onclick=()=>{showView('watches');$('watchQuery').value=q;$('target').focus()}}
 }
+let lastQueueCheck=0;
 async function pollResults(q,version,deadline,previousAttempt,notice=''){
  if(version!==searchVersion||$('app').hidden)return;
  try{
@@ -64,6 +66,7 @@ async function pollResults(q,version,deadline,previousAttempt,notice=''){
   if(offers.error)throw offers.error;
   renderOffers(offers.data,q);
   const p=progress.data;const finished=!progress.error&&p?.last_attempt&&p.last_attempt!==previousAttempt;
+  if(!finished&&isAdmin&&Date.now()<deadline&&Date.now()-lastQueueCheck>75000){lastQueueCheck=Date.now();try{const state=await crawlerRequest('GET');if(version!==searchVersion)return;if(!state.active&&state.health?.ready){await crawlerRequest('POST');notice='Ny kjøring startet for ventende søk …'}else if(!state.active)notice='Crawleren venter på databaseoppdatering.'}catch(e){notice='Søk i kø: '+e.message}}
   status(offers.data.length+' dokumenterte treff. '+(finished?'Prisinnhenting avsluttet.':notice||'Venter på prisoppdatering …'));
   if(!finished&&Date.now()<deadline)pollTimer=setTimeout(()=>pollResults(q,version,deadline,previousAttempt,notice),10000);
   else if(!finished)status(offers.data.length+' dokumenterte treff. Automatisk visning avsluttet; søket beholdes i kø.');
@@ -84,9 +87,9 @@ $('searchForm').onsubmit=async e=>{
   status(offers.data.length+' dokumenterte treff. '+(tracked.data.due?'Prisoppdatering i kø.':'Lagrede priser.'));
   if(tracked.data.due&&version===searchVersion&&!$('app').hidden){
    const previous=progress.data?.last_attempt;
-   let notice='Venter på crawleren …';
+   let notice='Venter på crawleren …';lastQueueCheck=Date.now();
    if(isAdmin){try{await crawlerRequest('POST');notice='Prisinnhenting startet …'}catch(e){notice=e.message.includes('allerede')?'En annen prisinnhenting pågår. Ditt søk er i kø.':'Søket beholdes i kø: '+e.message}}
-   if(version===searchVersion)pollResults(q,version,Date.now()+9*60*1000,previous,notice);
+   if(version===searchVersion)pollResults(q,version,Date.now()+18*60*1000,previous,notice);
   }
  }catch(e){if(version===searchVersion)fail(e)}
 };
