@@ -3,8 +3,30 @@ import os,json,time,re,gzip,io,urllib.request,urllib.error,urllib.parse,urllib.r
 from html.parser import HTMLParser
 from collections import deque
 from product_parser import parse, product_hint
-import random
-UA="PrisRadar/4.0 (private price research)"
+import random, socket, ipaddress, threading
+UA="PrisRadar/4.1 (+https://prisradar.pages.dev)"
+_rate_lock=threading.Lock()
+_last_request={}
+def same_host(a,b):return bool(a and b and a.lower().removeprefix("www.")==b.lower().removeprefix("www."))
+def load_robots(host,fetcher=None):
+    fetcher=fetcher or fetch
+    rp=urllib.robotparser.RobotFileParser()
+    try:rp.parse(fetcher("https://"+host+"/robots.txt",host).decode("utf8","replace").splitlines())
+    except urllib.error.HTTPError as e:
+        if e.code not in (404,410):raise
+        rp.allow_all=True
+    return rp
+def delay_for(rp):
+    if rp is None:return 2
+    rate=rp.request_rate(UA) or rp.request_rate("*")
+    return max(2,rp.crawl_delay(UA) or rp.crawl_delay("*") or 0,rate.seconds/rate.requests if rate and rate.requests else 0)
+def throttle(host,rp):
+    delay=delay_for(rp)
+    if delay>30:raise ValueError("robots delay exceeds run budget")
+    key=host.removeprefix("www.")
+    with _rate_lock:
+        now=time.monotonic();start=max(now,_last_request.get(key,now-delay)+delay);_last_request[key]=start
+    time.sleep(max(0,start-now))
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs): return None
 opener=urllib.request.build_opener(NoRedirect())
@@ -18,9 +40,16 @@ def fetch(url,host,robots=None):
 def fetch_once(url,host,robots=None):
     p=urllib.parse.urlsplit(url)
     if p.scheme!="https" or p.hostname not in (host,host.removeprefix("www."),"www."+host.removeprefix("www.")) or p.username or p.password or p.port not in (None,443): raise ValueError("URL not allowed")
-    if robots is not None and (p.hostname!=host or not robots.can_fetch(UA,url)):raise ValueError("robots disallows URL")
-    time.sleep(2)
-    with opener.open(urllib.request.Request(url,headers={"User-Agent":UA}),timeout=12) as r:
+    if not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(p.hostname,443,type=socket.SOCK_STREAM)):raise ValueError("nonpublic store address")
+    if robots is not None:
+        if not robots.can_fetch(UA,url):raise ValueError("robots disallows URL")
+        if p.hostname!=host:
+            # Independently check the redirect host; do not assume identical rules.
+            alias=load_robots(p.hostname)
+            if not alias.can_fetch(UA,url):raise ValueError("redirect robots disallows URL")
+            if delay_for(alias)>delay_for(robots):robots=alias
+    throttle(host,robots)
+    with opener.open(urllib.request.Request(url,headers={"User-Agent":UA,"Accept":"text/html,application/json,application/xml;q=0.9,*/*;q=0.5","Accept-Language":"nb-NO,nb;q=0.9,en;q=0.5"}),timeout=12) as r:
         raw=r.read(12000001)
         if len(raw)>12000000: raise ValueError("response too large")
         if raw.startswith(b'\x1f\x8b'):
@@ -65,9 +94,7 @@ def run():
         remaining_stores-=1
         root="https://"+host
         try:
-            raw=fetch(root+"/robots.txt",host);rp=urllib.robotparser.RobotFileParser();rp.parse(raw.decode("utf8","replace").splitlines())
-            if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):
-                print(host,"skipped: robots rate limit");continue
+            rp=load_robots(host)
             maps=deque(rp.site_maps() or [root+"/sitemap.xml"]);seen=set();pages=deque();maps_read=0
             while maps and maps_read<10 and budget>store_floor+3 and len(pages)<12000:
                 url=maps.popleft()
