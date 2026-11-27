@@ -78,3 +78,4 @@ def public_search(host,adapter,q,rp,fetcher=fetch):
     except urllib.error.HTTPError as e:
         if e.code in (401,403,429):raise
         return []
+    except (urllib.error.URLError,OSError):return []
