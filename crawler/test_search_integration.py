@@ -60,6 +60,22 @@ class Integration(unittest.TestCase):
         self.assertFalse(prices)
 
 class AdapterIntegration(unittest.TestCase):
+    def test_normalized_gtin_matching(self):
+        self.assertTrue(demand.offer_matches("Different title","4006381333931",None,"04006381333931"))
+        self.assertFalse(demand.offer_matches("04006381333931","4006381333932",None,"04006381333931"))
+        self.assertFalse(demand.offer_matches("04006381333931",None,None,"04006381333931"))
+        self.assertTrue(demand.offer_matches("Acme Mixer",None,None,"acme mixer"))
+    def test_feed_cache_reuses_download(self):
+        from merchant_feed import cached_feed
+        from unittest.mock import Mock
+        url="https://cache-test.example/feed.csv"
+        f=Mock(return_value=b"title,link,price\nAcme,https://cache-test.example/products/acme,199 NOK")
+        a=cached_feed(url,"cache-test.example",None,f)
+        b=cached_feed(url,"cache-test.example",None,f)
+        self.assertEqual(a,b)
+        self.assertEqual(a[0]["price"],199)
+        f.assert_called_once()
+
     def test_woo_minor_units(self):
         row={"type":"simple","is_purchasable":True,"is_in_stock":True,"name":"Acme Mixer","prices":{"currency_code":"NOK","currency_minor_unit":2,"price":"699500"}}
         self.assertEqual(store_adapters.woo_offer(row,HOST,URL)["price"],6995)
