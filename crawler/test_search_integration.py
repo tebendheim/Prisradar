@@ -23,6 +23,7 @@ class Integration(unittest.TestCase):
             if url.endswith("/robots.txt"):return robots
             if blocked:raise urllib.error.HTTPError(url,429,"limited",{},None)
             if url==BASE+"/":return HOME
+            if "/search/suggest.json?" in url:return json.dumps({"resources":{"results":{"products":[{"url":URL}]}}}).encode()
             if "/search?" in url:return RESULT
             if url==URL:return product(currency)
             self.fail("Unexpected fetch "+url)
