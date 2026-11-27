@@ -1,7 +1,8 @@
 name: Store discovery
 on:
   schedule:
-    - cron: '43 */2 * * *'
+    # En gang i døgnet. Holder et privat repo under 2000 Actions-min/mnd (se crawler/test_actions_budget.py).
+    - cron: '43 4 * * *'
   workflow_dispatch:
 permissions:
   contents: read

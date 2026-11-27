@@ -2,7 +2,8 @@ name: Bounded crawl
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 */2 * * *'
+    # Hver 4. time. Holder et privat repo under 2000 Actions-min/mnd (se crawler/test_actions_budget.py).
+    - cron: '17 */4 * * *'
 permissions:
   contents: read
 concurrency:

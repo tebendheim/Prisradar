@@ -10,7 +10,7 @@ Målet: finne de beste prisene hos norske nettbutikker raskt, uten systemkostnad
 
 Regler:
 - Crawleren bruker bare Python-standardbiblioteket. Frontend og functions bruker vanlig JS uten byggesteg. Ingen nye avhengigheter, tjenester eller betalte API-er.
-- Alt skal holde seg innenfor gratisnivåene: GitHub Actions (offentlig repo), Supabase Free (500 MB database, 5 GB trafikk) og Cloudflare Pages/Workers Free (100 000 forespørsler per dag). Hvis en endring kan sprenge en kvote, sier du fra med et anslag.
+- Alt skal holde seg innenfor gratisnivåene: GitHub Actions (maks 1700 min/mnd planlagt, siden repoet skal kunne være privat. Se crawler/test_actions_budget.py), Supabase Free (500 MB database, 5 GB trafikk) og Cloudflare Pages/Workers Free (100 000 forespørsler per dag). Hvis en endring kan sprenge en kvote, sier du fra med et anslag.
 - For fart bruker du færre og billigere kall. Batch skriving til Supabase, cache i frontend og hent ikke sider på nytt når det ikke trengs. Respekter robots.txt, Crawl-delay og 401/403/429. Aldri omgå botbeskyttelse, aldri forfalsk nettleseridentitet, aldri bruk proxyer.
 - Lagre aldri gjettede priser. Bare eksplisitt NOK, og `price_kind` skal være `exact` eller `from`.
 - Ingen hemmeligheter i kode eller logger. Ikke les .env.

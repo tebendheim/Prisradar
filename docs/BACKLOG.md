@@ -6,7 +6,7 @@
 3. `crawler/brreg_seed.py`: hent enheter med næringskode 47 og `hjemmeside` fra data.brreg.no, normaliser vertsnavn, legg i `store_candidates`. Med tester.
 4. Hev taket på 500 butikker i `store_adapters.py`.
 5. `guard_price_jump`: godta ny pris når samme pris er observert to ganger med minst 1 time imellom (Black Friday-fall holdes ellers tilbake for alltid).
-6. Del crawlen i flere parallelle Actions-jobber (`strategy.matrix`) når butikklisten passerer ~100.
+6. Mer gjennomstrømning per Actions-minutt (ikke parallelle jobber, siden de ganger minuttforbruket): flere butikker per kjøring innenfor samme timeout, og hopp over butikker uten endring (ETag/Last-Modified).
 7. Shopify `suggest.json`: lagre pris direkte når NOK er bekreftet for butikken.
 8. Kall `conditional_prices()` og lagre medlemspriser separat.
 

@@ -5,7 +5,7 @@ Finne flest mulig korrekte, ferske NOK-priser hos norske nettbutikker for produk
 Detaljerte mål og akseptkriterier: `docs/MAAL.md`. Arbeidsliste: `docs/BACKLOG.md`.
 
 ## Arkitektur
-- `crawler/` – Python 3.12, kun standardbibliotek. Kjøres av GitHub Actions (`.github/workflows/crawl.yml`) hver 2. time.
+- `crawler/` – Python 3.12, kun standardbibliotek. Kjøres av GitHub Actions (`.github/workflows/crawl.yml`) hver 4. time; butikkoppdagelse én gang i døgnet.
 - `supabase/migrations/` – SQL-migreringer, nummerert `YYYYMMDDNN.sql`. `schema_health_v1` og `demand.py` krever siste versjon.
 - `functions/` – Cloudflare Pages Functions. `web/` – frontend (Cloudflare Pages).
 
@@ -14,6 +14,7 @@ Detaljerte mål og akseptkriterier: `docs/MAAL.md`. Arbeidsliste: `docs/BACKLOG.
 - Lagre aldri gjettede priser. Kun eksplisitt NOK, `price_kind` = `exact` eller `from`.
 - Ingen hemmeligheter i kode, logger eller commits. `.env` leses aldri av agenter.
 - Ingen nye betalte tjenester, API-er eller avhengigheter. Ikke kjør Claude Code i GitHub Actions (krever API-nøkkel = kostnad).
+- GitHub Actions: repoet skal kunne være privat (2000 gratis min/mnd, hver jobb rundes opp til hele minutter). `crawler/test_actions_budget.py` stopper CI hvis planlagte workflows kan bruke mer enn 1700 min/mnd i verste fall. Hver jobb må ha `timeout-minutes`. Mer kapasitet hentes ved å gjøre hver kjøring mer effektiv, ikke ved flere kjøringer eller parallelle jobber.
 - Hver endring: tester først/samtidig. `python -m unittest discover -s crawler` skal være grønn før commit (CI stopper ellers crawleren).
 - Ny databaseendring = ny migreringsfil + oppdatert `schema_health_v1` + oppdatert versjonskrav i `demand.py` og `functions/api/crawler.js`.
 
