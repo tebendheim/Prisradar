@@ -4,6 +4,17 @@ from html.parser import HTMLParser
 from urllib.parse import urlsplit,urljoin
 from decimal import Decimal,InvalidOperation
 
+def json_documents(raw):
+    text=raw.strip().removeprefix("<!--").removesuffix("-->").strip()
+    decoder=json.JSONDecoder()
+    # Remove trailing commas outside JSON strings only.
+    text=re.sub(r'"(?:\\.|[^"\\])*"|,(?=\s*[}\]])',lambda m:m.group() if m.group().startswith('"') else "",text)
+    while text:
+        try:obj,end=decoder.raw_decode(text)
+        except (ValueError,RecursionError):break
+        yield obj
+        text=text[end:].lstrip(" \r\n\t;")
+
 class Page(HTMLParser):
     def __init__(self):
         super().__init__();self.meta={};self.scripts=[];self.active=False;self.parts=[];self.canonical=None
@@ -20,8 +31,7 @@ class Page(HTMLParser):
     def handle_endtag(self,tag):
         if tag=="script" and self.active:
             self.active=False
-            try:self.scripts.append(json.loads("".join(self.parts)))
-            except (ValueError,RecursionError):pass
+            self.scripts.extend(json_documents("".join(self.parts)))
 
 def walk(x,depth=0):
     if depth>35:return
@@ -54,11 +64,11 @@ def gtin(x):
 def same_page(a,b):
     if not isinstance(a,str):return False
     p=urlsplit(urljoin(b,a));q=urlsplit(b)
-    return p.scheme==q.scheme and p.hostname==q.hostname and p.path.rstrip("/")==q.path.rstrip("/")
+    return p.scheme==q.scheme and (p.hostname or "").removeprefix("www.")== (q.hostname or "").removeprefix("www.") and p.path.rstrip("/")==q.path.rstrip("/")
 
 def product_hint(url):
     p=urlsplit(url).path.lower()
-    return bool(re.search(r"/(?:product|products|produkt|produkter|p)/[^/]+|/p-\d+|/p/\d+|/\d{5,}(?:/|$)",p))
+    return bool(re.search(r"/(?:product|products|produkt|produkter|p)/[^/]+|/p-\d+|/p/\d+|/\d{5,}(?:/|$)|/[^/]+\.html$",p))
 
 def parse(raw,url,host,checked):
     p=Page();p.feed(raw.decode("utf8","replace"))
@@ -79,26 +89,42 @@ def parse(raw,url,host,checked):
         offers=item.get("offers",[])
         if isinstance(offers,dict):offers=[offers]
         candidates=[]
+        inherited=item.get("priceCurrency") or p.meta.get("product:price:currency") or p.meta.get("og:price:currency")
+        expanded=[]
         for o in offers:
             o=resolve(o)
-            if not isinstance(o,dict) or "AggregateOffer" in types(o):continue
+            if not isinstance(o,dict):continue
+            if "AggregateOffer" in types(o):
+                nested=o.get("offers",[])
+                if isinstance(nested,dict):nested=[nested]
+                if nested:
+                    for child in nested:
+                        child=resolve(child)
+                        if isinstance(child,dict):expanded.append(({**o,**child},False))
+                elif o.get("lowPrice") is not None:expanded.append(({**o,"price":o["lowPrice"]},True))
+            else:expanded.append((o,False))
+        for o,aggregate in expanded:
             if o.get("url") and not same_page(o["url"],url):continue
             if str(o.get("itemCondition","")).split("/")[-1] in ("UsedCondition","RefurbishedCondition","DamagedCondition"):continue
-            val=price(o.get("price")) if str(o.get("priceCurrency","")).upper()=="NOK" else None
+            val=price(o.get("price")) if str(o.get("priceCurrency") or inherited or "").upper()=="NOK" else None
             if val is None:
                 specs=o.get("priceSpecification",[])
                 if isinstance(specs,dict):specs=[specs]
                 for sp in specs:
                     sp=resolve(sp)
-                    if not isinstance(sp,dict) or str(sp.get("priceCurrency","")).upper()!="NOK":continue
+                    if not isinstance(sp,dict) or str(sp.get("priceCurrency") or o.get("priceCurrency") or inherited or "").upper()!="NOK":continue
                     if sp.get("eligibleQuantity") or sp.get("validForMemberTier") or sp.get("priceType") or sp.get("billingDuration") or "UnitPriceSpecification" in types(sp):continue
                     val=price(sp.get("price"))
                     if val is not None:break
             if val is None or o.get("validForMemberTier") or o.get("eligibleQuantity"):continue
-            candidates.append((val,str(o.get("availability","")).split("/")[-1]))
-        if not candidates or len(set(candidates))!=1:continue
-        val,availability=candidates[0]
-        results.append(dict(url=url,name=name.strip()[:500],host=host,gtin=next((g for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if (g:=gtin(item.get(k)))),None),model=str(item.get("mpn") or item.get("model") or "")[:200],price=val,shipping=None,availability=availability,checked=checked))
+            candidates.append((val,"AggregatePrice" if aggregate else str(o.get("availability","")).split("/")[-1],aggregate))
+        if not candidates:continue
+        # A lowPrice alone is only a from-price, never a verified in-stock variant.
+        in_stock=[c for c in candidates if c[1]=="InStock" and not c[2]]
+        val,availability,aggregate=min(in_stock or candidates,key=lambda c:c[0])
+        if len(set(candidates))>1 or aggregate:
+            name=name.strip()+" (fra-pris)"
+        results.append(dict(url=url,name=name.strip()[:500],host=host,gtin=None if len(set(candidates))>1 or aggregate else next((g for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if (g:=gtin(item.get(k)))),None),model=str(item.get("mpn") or item.get("model") or "")[:200],price=val,shipping=None,availability=availability,checked=checked))
     if results:return results
     # Do not use metadata to override ambiguous or used structured offers.
     if products or any("Product" in types(x) for x in objects):return []
