@@ -159,7 +159,7 @@ def process_one(deadline,seen=None,ctx=None):
     skipped=[]
     def work(h):
         if time.monotonic()>deadline-25:skipped.append(h);return 0
-        return process_store(h,q,config[h],evidence.get(h,[]),min(deadline,time.monotonic()+65),max(6,budget//len(selected)))
+        return process_store(h,q,config[h],evidence.get(h,[]),min(deadline,time.monotonic()+65),max(6,budget//len(selected)),ctx)
     # At most 12 threads, each on a different shop; per-host Crawl-delay and the per-host lock live in crawl.py.
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         results=list(pool.map(work,selected))
@@ -182,7 +182,7 @@ def persist_offers(host,q,offers):
     learn_assortment(host,[{"n":o["name"]} for o in offers])
     return len(offers)
 
-def process_store(host,q,config,prior,deadline,budget):
+def process_store(host,q,config,prior,deadline,budget,ctx=None):
     if time.monotonic()>deadline-25:return 0
     total=0
     count=0;found=0;detail="ok"
@@ -285,6 +285,9 @@ def process_store(host,q,config,prior,deadline,budget):
     except Exception as e:detail=error_detail(e)
     finally:
         if detail in ("HTTP 401","HTTP 403","HTTP 429"):
+            key=host.removeprefix("www.").lower()
+            for row in (ctx or {}).get("stores",[]):
+                if row["host"].removeprefix("www.").lower()==key:row["paused_until"]=stamp(1)
             config["paused_until"]=stamp(1)
             db("managed_stores",{"host":"eq."+host},"PATCH",{"paused_until":stamp(1)},"return=minimal")
         db("crawl_reports",None,"POST",{"host":host,"pages":count,"offers":found,"detail":detail},"return=minimal")

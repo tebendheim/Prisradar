@@ -129,3 +129,43 @@ class StoreStateAndDeadline(unittest.TestCase):
         with patch.object(demand,"db",side_effect=AssertionError("no db write expected")),patch.object(demand,"load_robots",side_effect=AssertionError("no network expected")):
             self.assertEqual(demand.process_store("a.no","q",{},[],time.monotonic()+10,6),0)
 if __name__=="__main__":unittest.main()
+
+class DeadlineMarginInDiscovery(unittest.TestCase):
+    RP=type("RP",(),{"site_maps":lambda s:["https://a.no/s1.xml","https://a.no/s2.xml"],"can_fetch":lambda s,*a:True,"crawl_delay":lambda s,u:20,"request_rate":lambda s,u:None})()
+    def test_discover_default_deadline_unchanged(self):
+        calls=[]
+        def f(u,h,rp=None):calls.append(u);return b"<urlset><url><loc>https://a.no/p/1</loc></url></urlset>"
+        with patch.object(durable,"fetch",side_effect=f):
+            durable.discover("a.no",self.RP,[5])
+        self.assertEqual(len(calls),2)
+    def test_no_fetch_starts_if_crawl_delay_passes_deadline(self):
+        calls=[]
+        with patch.object(durable,"fetch",side_effect=lambda *a:calls.append(a)):
+            # 20 s delay + 12 s timeout + 30 s margin = 62 s needed; only 50 s left
+            durable.discover("a.no",self.RP,[5],time.monotonic()+50)
+            self.assertEqual(calls,[])
+            self.assertFalse(durable.can_start(time.monotonic()+50,self.RP,30))
+            self.assertTrue(durable.can_start(time.monotonic()+70,self.RP,30))
+            self.assertTrue(durable.can_start(None,self.RP,30))
+    def test_catalogue_starts_no_store_without_room(self):
+        import catalog_discovery as cd
+        fetched=[]
+        def db(table,params=None,method="GET",body=None,prefer=None):
+            if table=="rpc/catalog_capacity_v1":return {"allowed":True}
+            if table=="managed_stores":return [{"host":"a.no","paused_until":None,"feed_path":None,"search_path":None}]
+            return []
+        with patch.object(cd,"db",side_effect=db),patch.object(cd,"db_all",side_effect=lambda t,p=None,**k:db(t)),patch.object(cd,"fetch",side_effect=lambda *a:fetched.append(a)),patch.object(cd,"load_robots",side_effect=lambda *a:fetched.append(a)):
+            cd.run(deadline=time.monotonic()+40,budget=60)
+        self.assertEqual(fetched,[])
+
+class AliasPause(unittest.TestCase):
+    def test_429_pauses_all_alias_rows_in_cache(self):
+        import urllib.error
+        rows=[{"host":"www.x.no","paused_until":None},{"host":"x.no","paused_until":None},{"host":"y.no","paused_until":None}]
+        ctx={"stores":rows}
+        def fetch(url,host,rp=None):
+            if url.endswith("/robots.txt"):raise urllib.error.HTTPError(url,429,"limited",{},None)
+        with patch.object(demand,"fetch",side_effect=fetch),patch.object(demand,"db",return_value=None),patch.object(demand,"affiliate_items",return_value=[]),patch.object(demand.socket,"getaddrinfo",return_value=[(2,1,6,"",("8.8.8.8",443))]),contextlib.redirect_stdout(io.StringIO()):
+            demand.process_store("www.x.no","q",rows[0],[],time.monotonic()+100,6,ctx)
+        self.assertTrue(rows[0]["paused_until"] and rows[1]["paused_until"])
+        self.assertIsNone(rows[2]["paused_until"])

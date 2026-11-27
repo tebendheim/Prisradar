@@ -1,6 +1,6 @@
 """Bounded catalogue maintenance: product metadata only, no price writes."""
 import datetime,os,time,urllib.robotparser,urllib.error,urllib.parse,socket,ipaddress
-from durable import db,db_all,discover,stamp
+from durable import db,db_all,discover,stamp,can_start
 from crawl import fetch,UA,error_detail,load_robots,same_host
 from product_parser import Page,walk,types,same_page,gtin,product_hint
 from merchant_feed import cached_feed,learn_assortment
@@ -61,13 +61,14 @@ def run(deadline=None,budget=45):
     stores=[s for s in stores if not s["paused_until"] or datetime.datetime.fromisoformat(s["paused_until"])<=now]
     if not stores:return
     offset=int(os.environ.get("GITHUB_RUN_NUMBER",str(now.date().toordinal())))%len(stores)
+    room=lambda rp=None:can_start(deadline,rp,30)
     for s in (stores[offset:]+stores[:offset])[:20]:
-        if budget<3 or time.monotonic()>deadline-30:break
+        if budget<3 or time.monotonic()>deadline-30 or not room():break
         h=s["host"];count=found=0;detail="catalogue"
         try:
             if not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(h,443,type=socket.SOCK_STREAM)):continue
             budget-=1;rp=load_robots(h,fetch)
-            if s.get("feed_path") and budget>2 and time.monotonic()<deadline-45:
+            if s.get("feed_path") and budget>2 and time.monotonic()<deadline-45 and room(rp):
                 u="https://"+h+s["feed_path"]
                 if rp.can_fetch(UA,u):
                     budget-=1;count+=1
@@ -75,7 +76,7 @@ def run(deadline=None,budget=45):
                     except urllib.error.HTTPError as e:
                         if e.code in (401,403,429):raise
                     except (ValueError,UnicodeError):pass
-            if budget>2 and rp.can_fetch(UA,"https://"+h+"/"):
+            if budget>2 and room(rp) and rp.can_fetch(UA,"https://"+h+"/"):
                 budget-=1
                 try:
                     raw=fetch("https://"+h+"/",h,rp);found+=learn_batch(list_names(raw,"https://"+h+"/"),h)
@@ -84,7 +85,7 @@ def run(deadline=None,budget=45):
                     if path and not s.get("search_path") and rp.can_fetch(UA,"https://"+h+path.replace("{q}","test")):patch["search_path"]=path
                     if not s.get("feed_path"):
                         for f in feeds:
-                            if budget<3 or time.monotonic()>deadline-40:break
+                            if budget<3 or not room(rp):break
                             if not rp.can_fetch(UA,"https://"+h+f):continue
                             budget-=1
                             try:
@@ -102,20 +103,20 @@ def run(deadline=None,budget=45):
                         u=urllib.parse.urljoin("https://"+h+"/",href);v=urllib.parse.urlsplit(u)
                         if v.scheme=="https" and same_host(v.hostname,h) and not v.query and not v.fragment and not product_hint(u) and any(k in v.path.lower() for k in ("/kategori","/category","/collections/","/c/")) and rp.can_fetch(UA,u):categories.append(u)
                     for u in list(dict.fromkeys(categories))[:2]:
-                        if budget<3 or time.monotonic()>deadline-30:break
+                        if budget<3 or not room(rp):break
                         budget-=1;count+=1;found+=learn_batch(list_names(fetch(u,h,rp),u),h)
                 except urllib.error.HTTPError as e:
                     if e.code in (401,403,429):raise
             due=db("crawl_pages",{"host":"eq."+h,"next_check":"lte."+stamp(),"select":"url","order":"next_check.asc,url.asc","limit":"100"})
             if len(due)<15:
-                b=[min(5,budget-1)];before=b[0];urls=discover(h,rp,b);budget-=before-b[0]
+                b=[min(5,budget-1)];before=b[0];urls=discover(h,rp,b,deadline);budget-=before-b[0]
                 urls=[u for u in urls if product_hint(u)][:5000]
                 for i in range(0,len(urls),500):
                     if time.monotonic()>deadline-30:break
                     db("crawl_pages",{"on_conflict":"url"},"POST",[{"host":h,"url":u} for u in urls[i:i+500]],"resolution=ignore-duplicates,return=minimal")
                 due=db("crawl_pages",{"host":"eq."+h,"next_check":"lte."+stamp(),"select":"url","order":"next_check.asc,url.asc","limit":"100"})
             for row in due[:max(1,min(15,budget))]:
-                if budget<=0 or time.monotonic()>deadline-25:break
+                if budget<=0 or not room(rp):break
                 u=row["url"]
                 if not same_host(urllib.parse.urlsplit(u).hostname,h) or not rp.can_fetch(UA,u):continue
                 budget-=1;count+=1;outcome="catalogue:no name";days=30

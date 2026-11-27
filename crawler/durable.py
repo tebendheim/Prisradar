@@ -1,6 +1,6 @@
 """Durable crawling, using the existing bounded network and product parser."""
 import os,re,json,urllib.request,urllib.parse,time,datetime
-from crawl import dry_run,dry_write,fetch,opener,UA,error_detail,extract,coupon_extract,send,load_robots,same_host
+from crawl import delay_for,dry_run,dry_write,fetch,opener,UA,error_detail,extract,coupon_extract,send,load_robots,same_host
 from product_parser import product_hint,Page,walk,types
 from sources import microdata,candidate_hosts
 import urllib.robotparser,urllib.error,xml.etree.ElementTree as ET
@@ -33,10 +33,14 @@ def db_all(table,params=None,page=1000,cap=20000,order="host.asc"):
         rows+=got
         if len(got)<want:break
     return rows
-def discover(host,rp,budget):
+def can_start(deadline,rp=None,margin=0):
+    """False if a fetch started now could finish after deadline-margin (Crawl-delay wait + 12 s timeout)."""
+    return deadline is None or time.monotonic()+min(30,delay_for(rp))+12<=deadline-margin
+def discover(host,rp,budget,deadline=None):
     maps=deque(rp.site_maps() or ["https://"+host+"/sitemap.xml"]);seen=set();pages=set()
     while maps and budget[0]>0 and len(seen)<6 and len(pages)<15000:
         u=maps.popleft()
+        if not can_start(deadline,rp,30):break
         if u in seen or not same_host(urllib.parse.urlsplit(u).hostname,host) or not rp.can_fetch(UA,u):continue
         seen.add(u);budget[0]-=1
         try:
