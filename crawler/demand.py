@@ -7,7 +7,8 @@ from sources import microdata
 from store_search import search_url,links
 import socket,ipaddress,time
 from catalog_seed import MODELS, URLS
-from store_rank import rank,relevant
+from store_rank import rank,relevant,categories
+from merchant_feed import learn_assortment
 from concurrent.futures import ThreadPoolExecutor
 
 def matches(text,q):
@@ -50,8 +51,11 @@ def process_one(deadline):
     for row in reports:history[row["host"]]=history.get(row["host"],0)+row["offers"]
     offset=int(os.environ.get("GITHUB_RUN_NUMBER","0"))%len(hosts)
     hosts=hosts[offset:]+hosts[:offset]
-    hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0)),reverse=True)
-    preferred=[h for h in hosts if relevant(h,q,len(evidence.get(h,[])))]
+    learned={}
+    for row in db("store_assortment",{"select":"host,category,samples","limit":"5000"}):
+        if row["category"] in categories(q):learned[row["host"]]=learned.get(row["host"],0)+row["samples"]
+    hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0)),reverse=True)
+    preferred=[h for h in hosts if learned.get(h,0) or relevant(h,q,len(evidence.get(h,[])))]
     hosts=preferred or hosts
     # Parallel across different shops, never parallel requests to the same shop.
     selected=hosts[:24]
@@ -60,6 +64,7 @@ def process_one(deadline):
     with ThreadPoolExecutor(max_workers=6) as pool:
         results=list(pool.map(lambda h:process_store(h,q,config[h],evidence.get(h,[]),deadline,max(4,budget//len(selected))),selected))
     total=sum(results)
+    print("Search metrics: selected stores",len(selected),"offers",total,"seconds remaining",round(deadline-time.monotonic()),flush=True)
     db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(1 if total else 0.25)},"return=minimal")
     print("Search:",q,"offers:",total,flush=True)
     return True
@@ -114,6 +119,7 @@ def process_store(host,q,config,prior,deadline,budget):
                     rows=db("offers",{"url":"eq."+o["url"],"name":"eq."+o["name"],"select":"id"})
                     if rows:db("search_offer_links",{"on_conflict":"query,offer_id"},"POST",[{"query":q,"offer_id":r["id"]} for r in rows],"resolution=ignore-duplicates,return=minimal")
                     db("rpc/learn_catalog_v1",None,"POST",{"n":o["name"],"src":u,"g":o.get("gtin")})
+                learn_assortment(host,[{"n":o["name"]} for o in offers])
                 found+=len(offers);total+=len(offers)
             except urllib.error.HTTPError as e:
                 if e.code in (403,429):detail=error_detail(e);break
