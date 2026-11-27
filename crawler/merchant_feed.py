@@ -7,7 +7,26 @@ from crawl import same_host
 import re
 from store_rank import categories
 from durable import db,stamp
-from collections import Counter
+from collections import Counter,OrderedDict
+from threading import Lock
+import time
+_feed_cache=OrderedDict()
+_feed_lock=Lock()
+_feed_locks={}
+
+def cached_feed(url,host,rp,fetcher):
+    """Bounded per-process cache; serialize downloads of the same feed."""
+    with _feed_lock:lock=_feed_locks.setdefault(url,Lock())
+    with lock:
+        with _feed_lock:
+            hit=_feed_cache.get(url)
+            if hit and time.monotonic()-hit[0]<900:
+                _feed_cache.move_to_end(url);return hit[1]
+        items=tuple(parse_feed(fetcher(url,host,rp),url))
+        with _feed_lock:
+            _feed_cache[url]=(time.monotonic(),items);_feed_cache.move_to_end(url)
+            while len(_feed_cache)>8:_feed_cache.popitem(last=False)
+        return items
 
 def clean(row,base):
     name=row.get("title") or row.get("name");link=row.get("link") or row.get("url")
