@@ -27,12 +27,13 @@ def run():
     for name,source in MODELS:
         db("rpc/learn_catalog_v1",None,"POST",{"n":name,"src":source,"g":None})
     deadline=time.monotonic()+350
+    search_deadline=deadline-110
     for _ in range(3):
-        if time.monotonic()>deadline-35:break
-        if not process_one(deadline):break
+        if time.monotonic()>search_deadline-35:break
+        if not process_one(search_deadline):break
     if time.monotonic()<deadline-45:
         from catalog_discovery import run as discover_catalog
-        try:discover_catalog(deadline=deadline,budget=30)
+        try:discover_catalog(deadline=deadline,budget=60)
         except urllib.error.HTTPError as e:
             if e.code not in (400,404):raise
             print("WARNING: catalogue maintenance unavailable; check supabase/store_catalog_upgrade.sql (HTTP "+str(e.code)+")",flush=True)
