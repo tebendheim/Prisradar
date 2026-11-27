@@ -1,7 +1,7 @@
 """Demand-driven crawler. Catalogue discovery is separate from price collection."""
 import os,re,datetime,urllib.parse,urllib.robotparser,urllib.error
 from durable import db,discover,stamp,words
-from crawl import fetch,UA,extract,send,error_detail
+from crawl import fetch,UA,extract,send,error_detail,load_robots,same_host
 from product_parser import Page,walk,types
 from sources import microdata
 from store_search import search_url,links
@@ -106,10 +106,7 @@ def process_store(host,q,config,prior,deadline,budget):
     try:
         if not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)):raise ValueError("nonpublic store address")
         budget-=1
-        raw=fetch("https://"+host+"/robots.txt",host)
-        rp=urllib.robotparser.RobotFileParser();rp.parse(raw.decode("utf8","replace").splitlines())
-        if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):
-            detail="robots rate restriction";return 0
+        rp=load_robots(host,fetch)
         # Previously known matching URLs are looked up server-side, not just the first 1000 rows.
         terms=[t for t in words(q) if t not in ("apple",) ] or words(q)
         params=[("host","eq."+host),("select","url"),("limit","40")]
@@ -117,7 +114,7 @@ def process_store(host,q,config,prior,deadline,budget):
         params.extend(("url","ilike.*"+t+"*") for t in terms[:8])
         candidates=set(prior)
         if not candidates:candidates={x["url"] for x in db("crawl_pages",params)}
-        known=[u for name,u in URLS if matches(name,q) and urllib.parse.urlsplit(u).hostname==host]
+        known=[u for name,u in URLS if matches(name,q) and same_host(urllib.parse.urlsplit(u).hostname,host)]
         candidates.update(known)
         if not candidates and not config["search_path"] and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
             budget-=1
@@ -133,15 +130,15 @@ def process_store(host,q,config,prior,deadline,budget):
                 budget-=1
                 try:candidates.update(links(fetch(u,host,rp),u,host,q))
                 except urllib.error.HTTPError as e:
-                    if e.code in (403,429):raise
+                    if e.code in (401,403,429):raise
         # Public product-family pages supplement sitemap and search discovery.
         family_pages={"www.elkjop.no":"https://www.elkjop.no/brand/apple/airpods/airpods-produkter","www.power.no":"https://www.power.no/apple/","eplehuset.no":"https://eplehuset.no/collections/airpods"}
-        family=family_pages.get(host)
+        family=family_pages.get(host) or family_pages.get(host.removeprefix("www."))
         if "airpods" in terms and family and budget>3 and time.monotonic()<deadline-35 and rp.can_fetch(UA,family):
             budget-=1
             try:candidates.update(links(fetch(family,host,rp),family,host,q))
             except urllib.error.HTTPError as e:
-                if e.code in (403,429):raise
+                if e.code in (401,403,429):raise
         if not candidates:
             allowance=[min(5,max(0,budget-2))]
             before=allowance[0];pages=discover(host,rp,allowance);budget-=before-allowance[0]
@@ -153,7 +150,7 @@ def process_store(host,q,config,prior,deadline,budget):
         rejected=0
         for u in sorted(candidates,key=lambda u:(u not in known,-sum(t in u.lower() for t in terms),u))[:8]:
             if budget<=0 or time.monotonic()>deadline-20:break
-            if urllib.parse.urlsplit(u).hostname!=host or not rp.can_fetch(UA,u):continue
+            if not same_host(urllib.parse.urlsplit(u).hostname,host) or not rp.can_fetch(UA,u):continue
             budget-=1;count+=1
             try:
                 raw=fetch(u,host,rp);offers=list(extract(raw,u,host))
@@ -171,12 +168,12 @@ def process_store(host,q,config,prior,deadline,budget):
                 learn_assortment(host,[{"n":o["name"]} for o in offers])
                 found+=len(offers);total+=len(offers)
             except urllib.error.HTTPError as e:
-                if e.code in (403,429):detail=error_detail(e);break
+                if e.code in (401,403,429):detail=error_detail(e);break
                 detail=error_detail(e)
         if rejected and not found and detail=="ok":detail="no matching structured NOK offers on "+str(rejected)+" pages"
     except Exception as e:detail=error_detail(e)
     finally:
-        if detail in ("HTTP 403","HTTP 429"):db("managed_stores",{"host":"eq."+host},"PATCH",{"paused_until":stamp(1)},"return=minimal")
+        if detail in ("HTTP 401","HTTP 403","HTTP 429"):db("managed_stores",{"host":"eq."+host},"PATCH",{"paused_until":stamp(1)},"return=minimal")
         db("crawl_reports",None,"POST",{"host":host,"pages":count,"offers":found,"detail":detail},"return=minimal")
         db("search_store_checks",{"query":"eq."+q,"host":"eq."+host},"PATCH",{"checked":stamp(),"next_check":stamp(0.25 if found else 0.08),"status":"found" if found else "no_offer" if count and detail=="ok" else "incomplete","offers":found,"detail":detail},"return=minimal")
         print(host,count,found,detail,flush=True)
