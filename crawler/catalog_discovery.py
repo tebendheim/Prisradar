@@ -45,6 +45,7 @@ def learn_batch(products,host=None):
     accepted=0
     for i in range(0,len(rows),100):
         n=db("rpc/learn_catalog_batch_v1",None,"POST",{"items":rows[i:i+100]})
+        if host and n:db("rpc/index_store_products_v1",None,"POST",{"h":host,"items":rows[i:i+100]})
         accepted+=int(n or 0)
         if not n:break
     if host and accepted:learn_assortment(host,rows[:accepted])
