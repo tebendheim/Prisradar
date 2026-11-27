@@ -1,0 +1,33 @@
+"""Explicitly configured public merchant feeds. Never guess feed endpoints."""
+import csv,io,xml.etree.ElementTree as ET
+from urllib.parse import urljoin,urlsplit
+from product_parser import gtin
+from store_rank import categories
+from durable import db
+from collections import Counter
+
+def clean(row,base):
+    name=row.get("title") or row.get("name");link=row.get("link") or row.get("url")
+    if not isinstance(name,str) or not isinstance(link,str) or not 2<=len(name.strip())<=500:return None
+    try:
+        url=urljoin(base,link);u=urlsplit(url)
+        if u.scheme!="https" or u.hostname!=urlsplit(base).hostname or u.username or u.password or u.port not in (None,443):return None
+    except ValueError:return None
+    return {"n":name.strip(),"src":u._replace(fragment="").geturl(),"g":gtin(row.get("gtin"))}
+
+def parse_feed(raw,base):
+    text=raw.decode("utf-8-sig","replace")
+    if text.lstrip().startswith("<"):
+        if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():raise ValueError("XML declarations not supported")
+        root=ET.fromstring(text)
+        rows=({c.tag.split("}")[-1]:c.text for c in item} for item in root.iter() if item.tag.split("}")[-1] in ("item","entry","product"))
+    else:
+        rows=csv.DictReader(io.StringIO(text),delimiter="\t" if "\t" in text.partition("\n")[0] else ",")
+    for i,row in enumerate(rows):
+        if i>=10000:break
+        item=clean(row,base)
+        if item:yield item
+
+def learn_assortment(host,items):
+    counts=Counter(c for item in items for c in categories(item["n"]))
+    if counts:db("rpc/record_assortment_v1",None,"POST",{"h":host,"counts":dict(counts)})
