@@ -1,7 +1,7 @@
 """Bounded catalogue maintenance: product metadata only, no price writes."""
 import datetime,os,time,urllib.robotparser,urllib.error,urllib.parse,socket,ipaddress
 from durable import db,discover,stamp
-from crawl import fetch,UA,error_detail
+from crawl import fetch,UA,error_detail,load_robots,same_host
 from product_parser import Page,walk,types,same_page,gtin,product_hint
 from merchant_feed import parse_feed,learn_assortment
 from sources import candidate_hosts
@@ -32,7 +32,7 @@ def list_names(raw,url):
         if not isinstance(n,str) or not isinstance(u,str) or not 2<=len(n.strip())<=500:continue
         try:
             u=urllib.parse.urljoin(url,u);v=urllib.parse.urlsplit(u)
-            if v.scheme!="https" or v.hostname!=urllib.parse.urlsplit(url).hostname or v.username or v.password or v.port not in (None,443) or not product_hint(u):continue
+            if v.scheme!="https" or not same_host(v.hostname,urllib.parse.urlsplit(url).hostname) or v.username or v.password or v.port not in (None,443) or not product_hint(u):continue
             u=v._replace(fragment="").geturl()
         except ValueError:continue
         g=next((g for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if (g:=gtin(x.get(k)))),None)
@@ -66,16 +66,14 @@ def run(deadline=None,budget=45):
         h=s["host"];count=found=0;detail="catalogue"
         try:
             if not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(h,443,type=socket.SOCK_STREAM)):continue
-            budget-=1;rp=urllib.robotparser.RobotFileParser()
-            rp.parse(fetch("https://"+h+"/robots.txt",h).decode("utf8","replace").splitlines())
-            if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):continue
+            budget-=1;rp=load_robots(h,fetch)
             if s.get("feed_path") and budget>2 and time.monotonic()<deadline-45:
                 u="https://"+h+s["feed_path"]
                 if rp.can_fetch(UA,u):
                     budget-=1;count+=1
                     try:found+=learn_batch(list(parse_feed(fetch(u,h,rp),u))[:1000],h)
                     except urllib.error.HTTPError as e:
-                        if e.code in (403,429):raise
+                        if e.code in (401,403,429):raise
                     except (ValueError,UnicodeError):pass
             if budget>2 and rp.can_fetch(UA,"https://"+h+"/"):
                 budget-=1
@@ -93,7 +91,7 @@ def run(deadline=None,budget=45):
                                 items=list(parse_feed(fetch("https://"+h+f,h,rp),"https://"+h+f))[:1000]
                                 if items:found+=learn_batch(items,h);patch["feed_path"]=f;break
                             except urllib.error.HTTPError as e:
-                                if e.code in (403,429):raise
+                                if e.code in (401,403,429):raise
                             except (ValueError,UnicodeError):pass
                     if patch:db("managed_stores",{"host":"eq."+h},"PATCH",patch,"return=minimal")
                     candidates=[x for x in candidate_hosts(raw,"https://"+h+"/") if x.removeprefix("www.")!=h.removeprefix("www.")]
@@ -102,12 +100,12 @@ def run(deadline=None,budget=45):
                     parser=Anchors();parser.feed(raw.decode("utf8","replace"));categories=[]
                     for href,_ in parser.rows:
                         u=urllib.parse.urljoin("https://"+h+"/",href);v=urllib.parse.urlsplit(u)
-                        if v.scheme=="https" and v.hostname==h and not v.query and not v.fragment and not product_hint(u) and any(k in v.path.lower() for k in ("/kategori","/category","/collections/","/c/")) and rp.can_fetch(UA,u):categories.append(u)
+                        if v.scheme=="https" and same_host(v.hostname,h) and not v.query and not v.fragment and not product_hint(u) and any(k in v.path.lower() for k in ("/kategori","/category","/collections/","/c/")) and rp.can_fetch(UA,u):categories.append(u)
                     for u in list(dict.fromkeys(categories))[:2]:
                         if budget<3 or time.monotonic()>deadline-30:break
                         budget-=1;count+=1;found+=learn_batch(list_names(fetch(u,h,rp),u),h)
                 except urllib.error.HTTPError as e:
-                    if e.code in (403,429):raise
+                    if e.code in (401,403,429):raise
             due=db("crawl_pages",{"host":"eq."+h,"next_check":"lte."+stamp(),"select":"url","order":"next_check.asc,url.asc","limit":"100"})
             if len(due)<15:
                 b=[min(5,budget-1)];before=b[0];urls=discover(h,rp,b);budget-=before-b[0]
@@ -119,20 +117,20 @@ def run(deadline=None,budget=45):
             for row in due[:max(1,min(15,budget))]:
                 if budget<=0 or time.monotonic()>deadline-25:break
                 u=row["url"]
-                if urllib.parse.urlsplit(u).hostname!=h or not rp.can_fetch(UA,u):continue
+                if not same_host(urllib.parse.urlsplit(u).hostname,h) or not rp.can_fetch(UA,u):continue
                 budget-=1;count+=1;outcome="catalogue:no name";days=30
                 try:
                     products=list(names(fetch(u,h,rp),u))
                     found+=learn_batch(products,h)
                     if products:outcome="catalogue:name";days=90
                 except urllib.error.HTTPError as e:
-                    if e.code in (403,429):raise
+                    if e.code in (401,403,429):raise
                     outcome=error_detail(e);days=7
                 except Exception as e:outcome=error_detail(e);days=7
                 db("crawl_pages",{"url":"eq."+u},"PATCH",{"checked":stamp(),"outcome":outcome,"next_check":stamp(days)},"return=minimal")
         except Exception as e:
             detail=error_detail(e)
-            if detail in ("HTTP 403","HTTP 429"):db("managed_stores",{"host":"eq."+h},"PATCH",{"paused_until":stamp(1)},"return=minimal")
+            if detail in ("HTTP 401","HTTP 403","HTTP 429"):db("managed_stores",{"host":"eq."+h},"PATCH",{"paused_until":stamp(1)},"return=minimal")
         finally:
             db("crawl_reports",None,"POST",{"host":h,"pages":count,"offers":0,"detail":detail+"; product names: "+str(found)},"return=minimal")
             print(h,"catalogue pages",count,"names",found,detail,flush=True)
