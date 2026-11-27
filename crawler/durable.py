@@ -1,6 +1,6 @@
 """Durable crawling, using the existing bounded network and product parser."""
 import os,re,json,urllib.request,urllib.parse,time,datetime
-from crawl import fetch,opener,UA,error_detail,extract,coupon_extract,send
+from crawl import fetch,opener,UA,error_detail,extract,coupon_extract,send,load_robots,same_host
 from product_parser import product_hint,Page,walk,types
 from sources import microdata,candidate_hosts
 import urllib.robotparser,urllib.error,xml.etree.ElementTree as ET
@@ -20,7 +20,7 @@ def discover(host,rp,budget):
     maps=deque(rp.site_maps() or ["https://"+host+"/sitemap.xml"]);seen=set();pages=set()
     while maps and budget[0]>0 and len(seen)<6 and len(pages)<15000:
         u=maps.popleft()
-        if u in seen or urllib.parse.urlsplit(u).hostname!=host or not rp.can_fetch(UA,u):continue
+        if u in seen or not same_host(urllib.parse.urlsplit(u).hostname,host) or not rp.can_fetch(UA,u):continue
         seen.add(u);budget[0]-=1
         try:
             tree=ET.fromstring(fetch(u,host,rp))
@@ -28,9 +28,9 @@ def discover(host,rp,budget):
             if tree.tag.endswith("sitemapindex"):
                 maps.extend(sorted(locs,key=lambda u:not bool(re.search("product|produkt|vare",u,re.I)))[:100])
             else:
-                pages.update(u for u in locs if len(u)<=1500 and urllib.parse.urlsplit(u).hostname==host and urllib.parse.urlsplit(u).scheme=="https" and rp.can_fetch(UA,u))
+                pages.update(u for u in locs if len(u)<=1500 and same_host(urllib.parse.urlsplit(u).hostname,host) and urllib.parse.urlsplit(u).scheme=="https" and rp.can_fetch(UA,u))
         except urllib.error.HTTPError as e:
-            if e.code in (403,429):raise
+            if e.code in (401,403,429):raise
         except (ValueError,ET.ParseError):continue
     return sorted(pages,key=lambda u:(not product_hint(u),u))[:15000]
 def words(q):return re.findall(r"[a-z0-9æøå]+",q.lower())
@@ -51,10 +51,7 @@ def run():
         local=[allocation];count=0;found_count=0;detail="ok"
         try:
             local[0]-=1
-            raw=fetch("https://"+host+"/robots.txt",host)
-            rp=urllib.robotparser.RobotFileParser();rp.parse(raw.decode("utf8","replace").splitlines())
-            if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):
-                detail="robots rate restriction";continue
+            rp=load_robots(host,fetch)
             # Keep previously discovered pages and their next-check timestamps.
             due=db("crawl_pages",{"host":"eq."+host,"next_check":"lte."+stamp(),"select":"url","order":"next_check.asc","limit":"1000"})
             urls={x["url"] for x in due}
@@ -73,7 +70,7 @@ def run():
             ordered=sorted(urls,key=lambda u:(-max([relevance(u,r["query"]) for r in reqs] or [0]),not product_hint(u),u))
             for u in ordered:
                 if local[0]<=0:break
-                if urllib.parse.urlsplit(u).hostname!=host or not rp.can_fetch(UA,u):continue
+                if not same_host(urllib.parse.urlsplit(u).hostname,host) or not rp.can_fetch(UA,u):continue
                 local[0]-=1;count+=1;outcome="no structured offer"
                 try:
                     raw=fetch(u,host,rp);offers=list(extract(raw,u,host))
@@ -91,7 +88,7 @@ def run():
                         db("coupons",{"on_conflict":"host,code,source"},"POST",list({(x["host"],x["code"],x["source"]):x for x in coupons}.values()),"resolution=ignore-duplicates,return=minimal")
                 except urllib.error.HTTPError as e:
                     outcome=error_detail(e)
-                    if e.code in (403,429):
+                    if e.code in (401,403,429):
                         detail=outcome;break
                 except Exception as e:outcome=error_detail(e)
                 db("crawl_pages",{"url":"eq."+u},"PATCH",{"checked":stamp(),"outcome":outcome,"next_check":stamp(1 if outcome=="offer" else 14)},"return=minimal")
