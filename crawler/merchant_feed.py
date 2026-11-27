@@ -28,20 +28,38 @@ def cached_feed(url,host,rp,fetcher):
             while len(_feed_cache)>8:_feed_cache.popitem(last=False)
         return items
 
-def clean(row,base):
-    name=row.get("title") or row.get("name");link=row.get("link") or row.get("url")
+def clean(row,base,merchant_host=None):
+    name=row.get("title") or row.get("name") or row.get("product_name");link=row.get("merchant_deep_link") or row.get("product_url") or row.get("link") or row.get("url")
+    if merchant_host:
+        # Prefer a verified direct merchant destination, not an opaque tracking URL.
+        options=[row.get(k) for k in ("merchant_deep_link","product_url","merchant_url","link","url","aw_deep_link","deep_link")]
+        link=None
+        for value in options:
+            if not isinstance(value,str):continue
+            try:
+                u=urlsplit(value)
+                if u.scheme=="https" and same_host(u.hostname,merchant_host) and not u.username and not u.password and u.port in (None,443):link=value;break
+                # Awin-style explicit destination parameter; do not follow tracking redirects.
+                for key in ("ued","url","destination","redirect"):
+                    from urllib.parse import parse_qs
+                    for dest in parse_qs(u.query).get(key,[]):
+                        d=urlsplit(dest)
+                        if d.scheme=="https" and same_host(d.hostname,merchant_host) and not d.username and not d.password and d.port in (None,443):link=dest;break
+                    if link:break
+                if link:break
+            except ValueError:continue
     if not isinstance(name,str) or not isinstance(link,str) or not 2<=len(name.strip())<=500:return None
     try:
         url=urljoin(base,link);u=urlsplit(url)
-        if u.scheme!="https" or not same_host(u.hostname,urlsplit(base).hostname) or u.username or u.password or u.port not in (None,443):return None
+        if u.scheme!="https" or not same_host(u.hostname,merchant_host or urlsplit(base).hostname) or u.username or u.password or u.port not in (None,443):return None
     except ValueError:return None
-    result={"n":name.strip(),"src":u._replace(fragment="").geturl(),"g":gtin(row.get("gtin"))}
+    result={"n":name.strip(),"src":u._replace(fragment="").geturl(),"g":gtin(row.get("gtin") or row.get("ean") or row.get("product_GTIN"))}
     def nok(value):
         m=re.fullmatch(r"\s*(.*?)\s+NOK\s*",str(value or ""),re.I)
         if m:return price(m.group(1))
         if str(row.get("currency") or row.get("price_currency") or "").upper()=="NOK":return price(value)
         return None
-    regular=nok(row.get("price"))
+    regular=nok(row.get("price") or row.get("search_price") or row.get("display_price"))
     sale=nok(row.get("sale_price"))
     condition=str(row.get("condition") or "").lower()
     if regular is not None and condition not in ("used","refurbished","damaged"):
@@ -51,7 +69,7 @@ def clean(row,base):
         result["availability"]={"in_stock":"InStock","out_of_stock":"OutOfStock","preorder":"PreOrder","backorder":"BackOrder"}.get(str(row.get("availability") or "").lower().replace(" ","_"),"")
     return result
 
-def parse_feed(raw,base):
+def parse_feed(raw,base,merchant_host=None):
     text=raw.decode("utf-8-sig","replace")
     if text.lstrip().startswith("<"):
         if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():raise ValueError("XML declarations not supported")
@@ -61,7 +79,7 @@ def parse_feed(raw,base):
         rows=csv.DictReader(io.StringIO(text),delimiter="\t" if "\t" in text.partition("\n")[0] else ",")
     for i,row in enumerate(rows):
         if i>=10000:break
-        item=clean(row,base)
+        item=clean(row,base,merchant_host)
         if item:yield item
 
 def learn_assortment(host,items):
