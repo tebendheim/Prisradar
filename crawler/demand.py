@@ -150,7 +150,13 @@ def process_store(host,q,config,prior,deadline,budget):
             config["adapter"]=detected["adapter"]
         if config.get("adapter") in ("shopify","woocommerce") and budget>3 and time.monotonic()<deadline-35:
             budget-=1
-            candidates.update(public_search(host,config["adapter"],q,rp,fetch))
+            api_offers=[]
+            candidates.update(public_search(host,config["adapter"],q,rp,fetch,api_offers))
+            api_offers=[o for o in api_offers if matches(o["name"],q) or (o.get("gtin") and o["gtin"].lstrip("0")==q.lstrip("0"))]
+            if api_offers:
+                n=persist_offers(host,q,api_offers);found+=n;total+=n
+            api_urls={o["url"] for o in api_offers}
+        else:api_urls=set()
         if config["search_path"] and budget>2:
             u=search_url(host,config["search_path"],q)
             if rp.can_fetch(UA,u):
@@ -173,7 +179,8 @@ def process_store(host,q,config,prior,deadline,budget):
             for i in range(0,len(pages),500):
                 db("crawl_pages",{"on_conflict":"url"},"POST",[{"url":u,"host":host} for u in pages[i:i+500]],"resolution=ignore-duplicates,return=minimal")
             candidates.update(u for u in pages if matches(u,q))
-        if not candidates:detail="no matching product URLs"
+        candidates.difference_update(api_urls)
+        if not candidates and not found:detail="no matching product URLs"
         rejected=0
         for u in sorted(candidates,key=lambda u:(u not in known,-sum(t in u.lower() for t in terms),u))[:8]:
             if budget<=0 or time.monotonic()>deadline-20:break
