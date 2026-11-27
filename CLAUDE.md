@@ -32,6 +32,7 @@ Statuslinjen viser `Prisradar X%/20% av uka`. Hooks i `.claude/settings.json` va
 
 ## Lokal kjøring
 - Offline tester: `python -m unittest discover -s crawler`
+- Tørrkjøring (henter og parser, skriver ingenting til Supabase; trenger fortsatt URL/nøkkel for lesing): `DRY_RUN=1 PAGE_BUDGET=20 python3 crawler/demand.py`
 - Mot ekte Supabase: legg `SUPABASE_URL` og `SUPABASE_SERVICE_ROLE_KEY` i `.env` (gitignored), kjør `set -a; . ./.env; set +a; PAGE_BUDGET=20 python crawler/demand.py`
 
 ## Supabase via MCP

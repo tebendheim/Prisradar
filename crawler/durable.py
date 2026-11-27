@@ -1,13 +1,19 @@
 """Durable crawling, using the existing bounded network and product parser."""
 import os,re,json,urllib.request,urllib.parse,time,datetime
-from crawl import fetch,opener,UA,error_detail,extract,coupon_extract,send,load_robots,same_host
+from crawl import dry_run,dry_write,fetch,opener,UA,error_detail,extract,coupon_extract,send,load_robots,same_host
 from product_parser import product_hint,Page,walk,types
 from sources import microdata,candidate_hosts
 import urllib.robotparser,urllib.error,xml.etree.ElementTree as ET
 from collections import deque
 def stamp(days=0):
     return (datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=days)).isoformat()
+# Read-only (STABLE, no inserts) RPCs the crawler needs to start; the only non-GET calls allowed in DRY_RUN.
+# schema_health_v1: readiness check. catalog_capacity_v1: size check that gates catalogue learning.
+DRY_RUN_READ_RPC=frozenset({"rpc/schema_health_v1","rpc/catalog_capacity_v1"})
 def db(table,params=None,method="GET",body=None,prefer=None):
+    if dry_run():
+        if method!="GET" and table not in DRY_RUN_READ_RPC:dry_write(table,method,body);return None
+        if "SUPABASE_URL" not in os.environ or "SUPABASE_SERVICE_ROLE_KEY" not in os.environ:raise RuntimeError("DRY_RUN: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for reads ("+table+")")
     base=os.environ["SUPABASE_URL"].rstrip("/")
     if not re.fullmatch(r"https://[a-z0-9]+\.supabase\.co",base):raise ValueError("bad DB URL")
     key=os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -22,7 +28,8 @@ def db_all(table,params=None,page=1000,cap=20000,order="host.asc"):
     base.setdefault("order",order);rows=[]
     while len(rows)<cap:
         want=min(page,cap-len(rows))
-        got=db(table,dict(base,limit=str(want),offset=str(len(rows)))) or []
+        got=db(table,dict(base,limit=str(want),offset=str(len(rows))))
+        if not isinstance(got,list):break
         rows+=got
         if len(got)<want:break
     return rows

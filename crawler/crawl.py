@@ -81,8 +81,14 @@ def coupon_extract(raw,host,url):
     for m in re.finditer(r"(?i:rabattkode|kampanjekode|coupon code)\s*[:–=]?\s*([A-Z0-9][A-Z0-9_-]{3,24})\b",text):
         if m[1] in ("RABATT","KODE","BRUK","HER","NOK"):continue
         yield dict(host=host,code=m[1],source=url,context=text[max(0,m.start()-60):m.end()+90],status="discovered")
+def dry_run():return os.environ.get("DRY_RUN")=="1"
+def dry_write(table,method,body=None):
+    """DRY_RUN: log one line (table, method, row count only; never URL, headers or key) instead of writing."""
+    n=len(body) if isinstance(body,list) else len(body["items"]) if isinstance(body,dict) and isinstance(body.get("items"),list) else 0 if body is None else 1
+    print("DRY_RUN skipped write: "+table+" "+method+" rows="+str(n),flush=True)
 def send(table,rows,conflict):
     if not rows:return
+    if dry_run():dry_write(table,"POST",rows);return
     rows=list({tuple(r[k] for k in conflict.split(",")):r for r in rows}.values())
     base=os.environ["SUPABASE_URL"].rstrip("/")
     if not re.fullmatch(r"https://[a-z0-9]+\.supabase\.co",base):raise ValueError("Invalid Supabase URL")
