@@ -1,5 +1,6 @@
 """Explicitly configured public merchant feeds. Never guess feed endpoints."""
 import csv,io,xml.etree.ElementTree as ET
+import urllib.error
 from urllib.parse import urljoin,urlsplit
 from product_parser import gtin
 from store_rank import categories
@@ -30,4 +31,8 @@ def parse_feed(raw,base):
 
 def learn_assortment(host,items):
     counts=Counter(c for item in items for c in categories(item["n"]))
-    if counts:db("rpc/record_assortment_v1",None,"POST",{"h":host,"counts":dict(counts)})
+    if counts:
+        try:db("rpc/record_assortment_v1",None,"POST",{"h":host,"counts":dict(counts)})
+        except urllib.error.HTTPError as e:
+            if e.code != 404:raise
+            print("WARNING: assortment learning unavailable; price data retained",flush=True)
