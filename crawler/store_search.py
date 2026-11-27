@@ -3,6 +3,7 @@ from html.parser import HTMLParser
 from urllib.parse import urlsplit,urljoin,quote
 from product_parser import product_hint
 from durable import words
+from crawl import same_host
 import re
 class Anchors(HTMLParser):
     def __init__(self):
@@ -25,7 +26,7 @@ def links(raw,url,host,q):
     for href,parts in parser.rows:
         try:
             u=urlsplit(urljoin(url,href))
-            if u.scheme!="https" or u.hostname!=host or u.username or u.password or u.port not in (None,443):continue
+            if u.scheme!="https" or not same_host(u.hostname,host) or u.username or u.password or u.port not in (None,443):continue
             if not product_hint(u.geturl()):continue
             tokens=set(words(u.path+" "+" ".join(parts)))
             score=len(terms & tokens)
