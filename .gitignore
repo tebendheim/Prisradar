@@ -155,3 +155,10 @@ vite.config.ts.timestamp-*
 .nx/cache
 .nx/workspace-data
 .nx/migrate-runs
+
+# macOS
+.DS_Store
+
+# Claude Code: lokal forbrukslogg og personlige innstillinger
+.claude/usage/
+.claude/settings.local.json
