@@ -3,6 +3,8 @@ import datetime,os,time,urllib.robotparser,urllib.error,urllib.parse,socket,ipad
 from durable import db,discover,stamp
 from crawl import fetch,UA,error_detail
 from product_parser import Page,walk,types,same_page,gtin,product_hint
+from merchant_feed import parse_feed,learn_assortment
+from sources import candidate_hosts
 
 def names(raw,url):
     p=Page();p.feed(raw.decode("utf8","replace"))
@@ -37,18 +39,22 @@ def list_names(raw,url):
         if key not in seen:
             seen.add(key);yield {"n":n.strip(),"src":u,"g":g}
 
-def learn_batch(products):
+def learn_batch(products,host=None):
     rows=list({(x["n"],x["src"],x["g"]):x for x in products}.values())
+    accepted=0
     for i in range(0,len(rows),100):
-        db("rpc/learn_catalog_batch_v1",None,"POST",{"items":rows[i:i+100]})
-    return len(rows)
+        n=db("rpc/learn_catalog_batch_v1",None,"POST",{"items":rows[i:i+100]})
+        accepted+=int(n or 0)
+        if not n:break
+    if host and accepted:learn_assortment(host,rows[:accepted])
+    return accepted
 
 def run(deadline=None,budget=45):
     deadline=deadline or time.monotonic()+300
     size=db("rpc/catalog_capacity_v1",None,"POST",{})
     if not size["allowed"]:
         print("Catalogue storage guard reached");return
-    stores=db("managed_stores",{"enabled":"eq.true","select":"host,paused_until","limit":"500","order":"host.asc"})
+    stores=db("managed_stores",{"enabled":"eq.true","select":"host,paused_until,feed_path","limit":"500","order":"host.asc"})
     now=datetime.datetime.now(datetime.timezone.utc)
     stores=[s for s in stores if not s["paused_until"] or datetime.datetime.fromisoformat(s["paused_until"])<=now]
     if not stores:return
@@ -61,10 +67,20 @@ def run(deadline=None,budget=45):
             budget-=1;rp=urllib.robotparser.RobotFileParser()
             rp.parse(fetch("https://"+h+"/robots.txt",h).decode("utf8","replace").splitlines())
             if (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):continue
+            if s.get("feed_path") and budget>2 and time.monotonic()<deadline-45:
+                u="https://"+h+s["feed_path"]
+                if rp.can_fetch(UA,u):
+                    budget-=1;count+=1
+                    try:found+=learn_batch(list(parse_feed(fetch(u,h,rp),u))[:1000],h)
+                    except urllib.error.HTTPError as e:
+                        if e.code in (403,429):raise
+                    except (ValueError,UnicodeError):pass
             if budget>2 and rp.can_fetch(UA,"https://"+h+"/"):
                 budget-=1
                 try:
-                    raw=fetch("https://"+h+"/",h,rp);found+=learn_batch(list_names(raw,"https://"+h+"/"))
+                    raw=fetch("https://"+h+"/",h,rp);found+=learn_batch(list_names(raw,"https://"+h+"/"),h)
+                    candidates=[x for x in candidate_hosts(raw,"https://"+h+"/") if x.removeprefix("www.")!=h.removeprefix("www.")]
+                    if candidates:db("store_candidates",{"on_conflict":"host"},"POST",[{"host":x,"source":"https://"+h+"/"} for x in candidates],"resolution=ignore-duplicates,return=minimal")
                     from store_search import Anchors
                     parser=Anchors();parser.feed(raw.decode("utf8","replace"));categories=[]
                     for href,_ in parser.rows:
@@ -72,7 +88,7 @@ def run(deadline=None,budget=45):
                         if v.scheme=="https" and v.hostname==h and not v.query and not v.fragment and not product_hint(u) and any(k in v.path.lower() for k in ("/kategori","/category","/collections/","/c/")) and rp.can_fetch(UA,u):categories.append(u)
                     for u in list(dict.fromkeys(categories))[:2]:
                         if budget<3 or time.monotonic()>deadline-30:break
-                        budget-=1;count+=1;found+=learn_batch(list_names(fetch(u,h,rp),u))
+                        budget-=1;count+=1;found+=learn_batch(list_names(fetch(u,h,rp),u),h)
                 except urllib.error.HTTPError as e:
                     if e.code in (403,429):raise
             due=db("crawl_pages",{"host":"eq."+h,"next_check":"lte."+stamp(),"select":"url","order":"next_check.asc,url.asc","limit":"100"})
@@ -90,7 +106,7 @@ def run(deadline=None,budget=45):
                 budget-=1;count+=1;outcome="catalogue:no name";days=30
                 try:
                     products=list(names(fetch(u,h,rp),u))
-                    found+=learn_batch(products)
+                    found+=learn_batch(products,h)
                     if products:outcome="catalogue:name";days=90
                 except urllib.error.HTTPError as e:
                     if e.code in (403,429):raise
