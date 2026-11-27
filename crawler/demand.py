@@ -18,6 +18,11 @@ def matches(text,q):
     return bool(terms) and all(t in tokens for t in terms)
 
 def run():
+    try:health=db("rpc/schema_health_v1",None,"POST",{})
+    except urllib.error.HTTPError as e:
+        raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/2026112701.sql") from None
+    if not health.get("ready") or health.get("version",0)<2026112701:
+        raise SystemExit("Database migration required: "+str(health.get("missing",[])))
     db("rpc/prune_searches_v1",None,"POST",{})
     for name,source in MODELS:
         db("rpc/learn_catalog_v1",None,"POST",{"n":name,"src":source,"g":None})
