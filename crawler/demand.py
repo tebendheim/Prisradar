@@ -109,7 +109,7 @@ def process_store(host,q,config,prior,deadline,budget):
         if not candidates:candidates={x["url"] for x in db("crawl_pages",params)}
         known=[u for name,u in URLS if matches(name,q) and urllib.parse.urlsplit(u).hostname==host]
         candidates.update(known)
-        if not candidates and not config["search_path"] and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
+        if not config["search_path"] and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
             budget-=1
             detected=profile(fetch("https://"+host+"/",host,rp),"https://"+host+"/")
             path=detected["search_path"]
@@ -124,6 +124,14 @@ def process_store(host,q,config,prior,deadline,budget):
                 try:candidates.update(links(fetch(u,host,rp),u,host,q))
                 except urllib.error.HTTPError as e:
                     if e.code in (403,429):raise
+        # Public product-family pages supplement sitemap and search discovery.
+        family_pages={"www.elkjop.no":"https://www.elkjop.no/brand/apple/airpods/airpods-produkter","www.power.no":"https://www.power.no/apple/","eplehuset.no":"https://eplehuset.no/collections/airpods"}
+        family=family_pages.get(host)
+        if "airpods" in terms and family and budget>3 and time.monotonic()<deadline-35 and rp.can_fetch(UA,family):
+            budget-=1
+            try:candidates.update(links(fetch(family,host,rp),family,host,q))
+            except urllib.error.HTTPError as e:
+                if e.code in (403,429):raise
         if not candidates:
             allowance=[min(5,max(0,budget-2))]
             before=allowance[0];pages=discover(host,rp,allowance);budget-=before-allowance[0]
