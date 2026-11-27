@@ -122,9 +122,8 @@ def parse(raw,url,host,checked):
         # A lowPrice alone is only a from-price, never a verified in-stock variant.
         in_stock=[c for c in candidates if c[1]=="InStock" and not c[2]]
         val,availability,aggregate=min(in_stock or candidates,key=lambda c:c[0])
-        if len(set(candidates))>1 or aggregate:
-            name=name.strip()+" (fra-pris)"
-        results.append(dict(url=url,name=name.strip()[:500],host=host,gtin=None if len(set(candidates))>1 or aggregate else next((g for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if (g:=gtin(item.get(k)))),None),model=str(item.get("mpn") or item.get("model") or "")[:200],price=val,shipping=None,availability=availability,checked=checked))
+        kind="from" if len(set(candidates))>1 or aggregate else "exact"
+        results.append(dict(url=url,name=name.strip()[:500],host=host,gtin=None if len(set(candidates))>1 or aggregate else next((g for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if (g:=gtin(item.get(k)))),None),model=str(item.get("mpn") or item.get("model") or "")[:200],price=val,price_kind=kind,shipping=None,availability=availability,checked=checked))
     if results:return results
     # Do not use metadata to override ambiguous or used structured offers.
     if products or any("Product" in types(x) for x in objects):return []
@@ -136,5 +135,5 @@ def parse(raw,url,host,checked):
     currency=m.get("product:price:currency") or m.get("og:price:currency")
     val=price(m.get("product:price:amount") or m.get("og:price:amount"))
     if name and val is not None and str(currency).upper()=="NOK":
-        return [dict(url=url,name=name[:500],host=host,gtin=None,model="",price=val,shipping=None,availability=m.get("product:availability",""),checked=checked)]
+        return [dict(url=url,name=name[:500],host=host,gtin=None,model="",price=val,price_kind="exact",shipping=None,availability=m.get("product:availability",""),checked=checked)]
     return []
