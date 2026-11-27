@@ -6,7 +6,7 @@ from product_parser import gtin,price
 from crawl import same_host
 import re
 from store_rank import categories
-from durable import db
+from durable import db,stamp
 from collections import Counter
 
 def clean(row,base):
@@ -52,3 +52,10 @@ def learn_assortment(host,items):
         except urllib.error.HTTPError as e:
             if e.code != 404:raise
             print("WARNING: assortment learning unavailable; price data retained",flush=True)
+
+def feed_offers(items,host,query_matches):
+    """Price storage remains demand-driven: never import every feed price."""
+    for item in items:
+        if item.get("price") is None or not query_matches(item):continue
+        if not same_host(urlsplit(item["src"]).hostname,host):continue
+        yield dict(url=item["src"],name=item["n"],host=host,gtin=item.get("g"),model="",price=item["price"],price_kind="exact",shipping=None,availability=item.get("availability",""),checked=stamp())
