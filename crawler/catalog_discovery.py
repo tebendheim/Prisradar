@@ -61,7 +61,7 @@ def run(deadline=None,budget=45):
     stores=[s for s in stores if not s["paused_until"] or datetime.datetime.fromisoformat(s["paused_until"])<=now]
     if not stores:return
     offset=int(os.environ.get("GITHUB_RUN_NUMBER",str(now.date().toordinal())))%len(stores)
-    for s in (stores[offset:]+stores[:offset])[:8]:
+    for s in (stores[offset:]+stores[:offset])[:20]:
         if budget<3 or time.monotonic()>deadline-30:break
         h=s["host"];count=found=0;detail="catalogue"
         try:

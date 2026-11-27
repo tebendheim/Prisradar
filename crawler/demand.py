@@ -30,27 +30,55 @@ def offer_matches(name,g,model,q):
     return matches(name,q) or bool(model and model.lower()==q.lower())
 
 def run():
+    deadline=time.monotonic()+run_seconds()
     try:health=db("rpc/schema_health_v1",None,"POST",{})
     except urllib.error.HTTPError as e:
         raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/2026112708.sql") from None
     if not health.get("ready") or health.get("version",0)<2026112708:
         raise SystemExit("Database migration required: "+str(health.get("missing",[])))
     db("rpc/prune_searches_v1",None,"POST",{})
+    reason=idle_reason()
+    if reason:
+        print("Idle: nothing to do ("+reason+"); exiting early",flush=True);return
     db("rpc/learn_catalog_batch_v1",None,"POST",{"items":[{"n":name,"src":source,"g":None} for name,source in MODELS]})
-    deadline=time.monotonic()+350
-    search_deadline=deadline-150
-    for _ in range(3):
-        if time.monotonic()>search_deadline-35:break
-        if not process_one(search_deadline):break
+    search_deadline=deadline-MAINTENANCE_RESERVE
+    ctx={};seen=set()
+    # Time-driven: keep taking due searches while there is time, not a fixed count.
+    while time.monotonic()<search_deadline-35:
+        if not process_one(search_deadline,seen,ctx):break
     if time.monotonic()<deadline-100:
         from adapter_quality import run as audit_adapters
         audit_adapters(min(deadline-65,time.monotonic()+65),limit=2)
     if time.monotonic()<deadline-45:
         from catalog_discovery import run as discover_catalog
-        try:discover_catalog(deadline=deadline,budget=60)
+        try:discover_catalog(deadline=deadline,budget=max(60,min(150,int((deadline-time.monotonic())/2))))
         except urllib.error.HTTPError as e:
             if e.code not in (400,404):raise
             print("WARNING: catalogue maintenance unavailable; check supabase/store_catalog_upgrade.sql (HTTP "+str(e.code)+")",flush=True)
+
+# Job timeout is 8 min (480 s). Setup and tests use ~20 s; in-flight requests may finish up to ~25 s after the
+# deadline. 390 s leaves ~45 s margin. RUN_SECONDS can lower it (never above MAX_RUN_SECONDS).
+DEFAULT_RUN_SECONDS=390
+MAX_RUN_SECONDS=400
+MAINTENANCE_RESERVE=110
+IDLE_CATALOGUE_HOURS=20
+def run_seconds():
+    try:v=int(os.environ.get("RUN_SECONDS",DEFAULT_RUN_SECONDS))
+    except ValueError:v=DEFAULT_RUN_SECONDS
+    return max(60,min(MAX_RUN_SECONDS,v))
+
+def due_search_params(limit):
+    return {"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":str(limit)}
+
+def idle_reason():
+    """Three cheap indexed reads. Returns a log reason when there is no due search, no overdue page and catalogue
+    maintenance ran recently; None when there is work (or when a check fails, so we never skip work by mistake)."""
+    try:
+        if db("active_searches",due_search_params(1)):return None
+        if db("crawl_pages",{"next_check":"lte."+stamp(),"select":"url","limit":"1"}):return None
+        if not db("crawl_reports",{"detail":"like.catalogue*","created":"gte."+stamp(-IDLE_CATALOGUE_HOURS/24),"select":"host","limit":"1"}):return None
+    except urllib.error.HTTPError:return None
+    return "no due searches, no overdue pages, catalogue maintained within "+str(IDLE_CATALOGUE_HOURS)+" h"
 
 def optional_assortment():
     try:
@@ -60,11 +88,17 @@ def optional_assortment():
         print("WARNING: store_assortment unavailable; using static ranking. Apply supabase/store_catalog_upgrade.sql",flush=True)
         return []
 
-def process_one(deadline):
-    jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":"1"})
+WORKERS=12
+def process_one(deadline,seen=None,ctx=None):
+    # `seen` stops the same query being taken twice in one run (e.g. when writes are blocked by DRY_RUN).
+    seen=set() if seen is None else seen;ctx={} if ctx is None else ctx
+    jobs=[j for j in db("active_searches",due_search_params(len(seen)+1)) if j["query"] not in seen]
     if not jobs:
         print("No active searches due");return False
-    job=jobs[0];q=job["query"];stores=db_all("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until,adapter,feed_path"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc) or x["host"].removeprefix("www.") in configurations()};hosts=list(config)
+    job=jobs[0];q=job["query"];seen.add(q)
+    # Store rows are cached per run; process_store marks a store paused in place on 401/403/429, so it is not contacted again.
+    if "stores" not in ctx:ctx["stores"]=db_all("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until,adapter,feed_path"})
+    stores=ctx["stores"];config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc) or x["host"].removeprefix("www.") in configurations()};hosts=list(config)
     if not hosts: print("No enabled stores available");return False
     terms=[t for t in words(q) if t!="apple"] or words(q)
     # One global indexed lookup, not a network request to every shop.
@@ -90,7 +124,8 @@ def process_one(deadline):
     offset=int(os.environ.get("GITHUB_RUN_NUMBER","0"))%len(hosts)
     hosts=hosts[offset:]+hosts[:offset]
     learned={}
-    for row in optional_assortment():
+    if "assortment" not in ctx:ctx["assortment"]=optional_assortment()
+    for row in ctx["assortment"]:
         if row["category"] in categories(q):learned[row["host"]]=learned.get(row["host"],0)+row["samples"]
     hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0))+(15 if config[h].get('feed_path') or config[h].get('adapter') in ('shopify','woocommerce') or h.removeprefix('www.') in configurations() else 0),reverse=True)
     # Known unrelated stores are not searched without product-specific evidence.
@@ -107,21 +142,30 @@ def process_one(deadline):
         db("search_store_checks",{"query":"eq."+q,"host":"eq."+h},"DELETE",None,"return=minimal")
     # Parallel across different shops, never parallel requests to the same shop.
     if not hosts:
-        db("active_searches",{"query":"eq."+q},"PATCH",{"next_check":stamp(0.08)},"return=minimal");return False
+        db("active_searches",{"query":"eq."+q},"PATCH",{"next_check":stamp(0.08)},"return=minimal");return True
     db("search_store_checks",{"on_conflict":"query,host"},"POST",[{"query":q,"host":h} for h in hosts],"resolution=ignore-duplicates,return=minimal")
     checks=db_all("search_store_checks",{"query":"eq."+q,"select":"host,next_check,checked"},order="host.asc")
     due={x["host"] for x in checks if x["host"] in hosts and datetime.datetime.fromisoformat(x["next_check"])<=datetime.datetime.now(datetime.timezone.utc)}
     checked_hosts={x["host"] for x in checks if x.get("checked")}
-    selected=sorted((h for h in hosts if h in due),key=lambda h:h in checked_hosts)[:min(24,max(1,int(os.environ.get("PAGE_BUDGET","60"))//3))]
+    selected=[];keys=set()
+    for h in sorted((h for h in hosts if h in due),key=lambda h:h in checked_hosts):
+        # www and bare host are the same shop: one worker only, never two requests in flight to it.
+        if h.removeprefix("www.") not in keys:keys.add(h.removeprefix("www."));selected.append(h)
+    selected=selected[:min(24,max(1,int(os.environ.get("PAGE_BUDGET","60"))//3))]
     if not selected:
         db("active_searches",{"query":"eq."+q},"PATCH",{"next_check":stamp(0.08)},"return=minimal");return True
     budget=min(144,int(os.environ.get("PAGE_BUDGET","60"))*2)
     print("Ranked stores:",selected,flush=True)
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        results=list(pool.map(lambda h:process_store(h,q,config[h],evidence.get(h,[]),min(deadline,time.monotonic()+65),max(6,budget//len(selected))),selected))
+    skipped=[]
+    def work(h):
+        if time.monotonic()>deadline-25:skipped.append(h);return 0
+        return process_store(h,q,config[h],evidence.get(h,[]),min(deadline,time.monotonic()+65),max(6,budget//len(selected)))
+    # At most 12 threads, each on a different shop; per-host Crawl-delay and the per-host lock live in crawl.py.
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        results=list(pool.map(work,selected))
     total=sum(results)
     print("Search metrics: selected stores",len(selected),"offers",total,"seconds remaining",round(deadline-time.monotonic()),flush=True)
-    db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(0.02 if len(due)>len(selected) else 0.25 if total else 0.08)},"return=minimal")
+    db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(0.02 if len(due)>len(selected) or skipped else 0.25 if total else 0.08)},"return=minimal")
     print("Search:",q,"offers:",total,flush=True)
     return True
 
@@ -240,7 +284,9 @@ def process_store(host,q,config,prior,deadline,budget):
         if rejected and not found and detail=="ok":detail="no matching structured NOK offers on "+str(rejected)+" pages"
     except Exception as e:detail=error_detail(e)
     finally:
-        if detail in ("HTTP 401","HTTP 403","HTTP 429"):db("managed_stores",{"host":"eq."+host},"PATCH",{"paused_until":stamp(1)},"return=minimal")
+        if detail in ("HTTP 401","HTTP 403","HTTP 429"):
+            config["paused_until"]=stamp(1)
+            db("managed_stores",{"host":"eq."+host},"PATCH",{"paused_until":stamp(1)},"return=minimal")
         db("crawl_reports",None,"POST",{"host":host,"pages":count,"offers":found,"detail":detail},"return=minimal")
         db("search_store_checks",{"query":"eq."+q,"host":"eq."+host},"PATCH",{"checked":stamp(),"next_check":stamp(0.25 if found else 0.08),"status":"found" if found else "no_offer" if count and detail=="ok" else "incomplete","offers":found,"detail":detail},"return=minimal")
         print(host,count,found,detail,flush=True)

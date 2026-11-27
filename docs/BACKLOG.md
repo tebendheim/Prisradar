@@ -3,7 +3,7 @@
 ## Klar
 1. Prishistorikk i UI: RPC `price_history_v1` og «laveste pris siste 30 dager» per produkt (dataene finnes allerede i `price_history`).
 2. Prisvarsler i appen: RPC `watch_hits_v1` (lagrede ønsker mot laveste ferske pris), merke og liste ved innlogging. E-post og push er utenfor rammen, fordi det ikke er gratis eller trygt.
-4. Mer gjennomstrømning per Actions-minutt (ikke parallelle jobber, fordi de ganger minuttforbruket): flere butikker per kjøring innenfor samme timeout, hopp over uendrede sider (ETag/Last-Modified), og la en planlagt kjøring avslutte tidlig når det ikke er noe å gjøre.
+4. Mer gjennomstrømning del 2: hopp over uendrede sider (ETag/Last-Modified, krever migrering for `crawl_pages`), og la `adapter_quality` slutte å revurdere de samme butikkene uten tilbud hver kjøring.
 5. Medlemspriser også fra feeder, Shopify/Woo-API og mikrodata (i dag bare JSON-LD via `extract()`).
 7. Cache GitHub-runs i `functions/api/crawler.js` (15–30 s), slik at admin-UI-polling ikke bruker opp GitHub API- og Cloudflare-kvoter.
 8. Flytt de historiske SQL-filene i `supabase/`-roten til `supabase/archive/`, slik at ingen kjører gamle funksjonsversjoner ved et uhell.
@@ -12,6 +12,7 @@
 ## Pågår
 
 ## Ferdig
+- 2026-11-27 Mer arbeid per Actions-minutt: tidlig avslutning når det ikke er noe å gjøre, tidsstyrt søkeløkke (390 s), lås per host (12 tråder, aldri parallelt mot samme butikk), 20 butikker per katalogkjøring
 - 2026-11-27 `DRY_RUN=1`: crawleren henter og parser, men alle skrivinger til Supabase blokkeres og logges uten hemmeligheter
 - 2026-11-27 Butikktaket hevet fra 500 til 2000 (`MAX_STORES`), og butikklister leses med paginering (`db_all`) forbi PostgREST-grensen på 1000 rader
 - 2026-11-27 Claude Code-team (prosjektleder, implementerer, database-utvikler, tester, sikkerhet, forbruksvakt) og 20 %-forbruksgrense

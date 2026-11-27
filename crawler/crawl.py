@@ -7,6 +7,11 @@ import random, socket, ipaddress, threading
 UA="PrisRadar/4.1 (+https://prisradar.pages.dev)"
 _rate_lock=threading.Lock()
 _last_request={}
+_host_locks={}
+def host_lock(host):
+    """One in-flight request per host: threads for different hosts overlap, the same host is serialised."""
+    key=host.removeprefix("www.").lower()
+    with _rate_lock:return _host_locks.setdefault(key,threading.Lock())
 def same_host(a,b):return bool(a and b and a.lower().removeprefix("www.")==b.lower().removeprefix("www."))
 def load_robots(host,fetcher=None):
     fetcher=fetcher or fetch
@@ -48,9 +53,10 @@ def fetch_once(url,host,robots=None):
             alias=load_robots(p.hostname)
             if not alias.can_fetch(UA,url):raise ValueError("redirect robots disallows URL")
             if delay_for(alias)>delay_for(robots):robots=alias
-    throttle(host,robots)
-    with opener.open(urllib.request.Request(url,headers={"User-Agent":UA,"Accept":"text/html,application/json,application/xml;q=0.9,*/*;q=0.5","Accept-Language":"nb-NO,nb;q=0.9,en;q=0.5"}),timeout=12) as r:
-        raw=r.read(12000001)
+    with host_lock(host):
+        throttle(host,robots)
+        with opener.open(urllib.request.Request(url,headers={"User-Agent":UA,"Accept":"text/html,application/json,application/xml;q=0.9,*/*;q=0.5","Accept-Language":"nb-NO,nb;q=0.9,en;q=0.5"}),timeout=12) as r:
+            raw=r.read(12000001)
         if len(raw)>12000000: raise ValueError("response too large")
         if raw.startswith(b'\x1f\x8b'):
             with gzip.GzipFile(fileobj=io.BytesIO(raw)) as stream:
