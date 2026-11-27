@@ -1,6 +1,6 @@
 """Declarative adapters inferred from public storefront metadata; no generated code."""
 import re,urllib.parse,urllib.error,urllib.robotparser,socket,ipaddress,time
-from crawl import fetch,UA,error_detail
+from crawl import fetch,UA,error_detail,load_robots,same_host
 from durable import db,stamp
 from discover_settings import discover_paths
 from product_parser import Page,walk,types
@@ -36,9 +36,8 @@ def probe_candidates(deadline,limit=4):
             if not re.fullmatch(r"(?=.{4,150}$)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}",h) or not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(h,443,type=socket.SOCK_STREAM)):raise ValueError("invalid host")
             if db("managed_stores",{"host":"eq."+h,"select":"host","limit":"1"}):
                 patch["probe_next"]=stamp(90);result="already registered";continue
-            rp=urllib.robotparser.RobotFileParser()
-            rp.parse(fetch("https://"+h+"/robots.txt",h).decode("utf8","replace").splitlines())
-            if not rp.can_fetch(UA,"https://"+h+"/") or (rp.crawl_delay(UA) or rp.crawl_delay("*") or 0)>2 or rp.request_rate(UA) or rp.request_rate("*"):
+            rp=load_robots(h,fetch)
+            if not rp.can_fetch(UA,"https://"+h+"/"):
                 result="robots restriction";continue
             raw=fetch("https://"+h+"/",h,rp);p=profile(raw,"https://"+h+"/")
             # A search form alone is not proof of a shop.
