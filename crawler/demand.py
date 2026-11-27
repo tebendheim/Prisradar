@@ -76,7 +76,7 @@ def process_one(deadline):
         if row["category"] in categories(q):learned[row["host"]]=learned.get(row["host"],0)+row["samples"]
     hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0)),reverse=True)
     preferred=[h for h in hosts if learned.get(h,0) or relevant(h,q,len(evidence.get(h,[])))]
-    hosts=preferred or hosts
+    hosts=preferred+[h for h in hosts if h not in preferred]
     # Parallel across different shops, never parallel requests to the same shop.
     selected=hosts[:24]
     budget=min(120,int(os.environ.get("PAGE_BUDGET","60"))*2)
@@ -85,7 +85,7 @@ def process_one(deadline):
         results=list(pool.map(lambda h:process_store(h,q,config[h],evidence.get(h,[]),deadline,max(4,budget//len(selected))),selected))
     total=sum(results)
     print("Search metrics: selected stores",len(selected),"offers",total,"seconds remaining",round(deadline-time.monotonic()),flush=True)
-    db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(1 if total else 0.25)},"return=minimal")
+    db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(0.25 if total else 0.08)},"return=minimal")
     print("Search:",q,"offers:",total,flush=True)
     return True
 
@@ -117,7 +117,7 @@ def process_store(host,q,config,prior,deadline,budget):
             if path and rp.can_fetch(UA,search_url(host,path,q)):
                 patch["search_path"]=path;config["search_path"]=path
             db("managed_stores",{"host":"eq."+host},"PATCH",patch,"return=minimal")
-        if not known and config["search_path"] and budget>2:
+        if config["search_path"] and budget>2:
             u=search_url(host,config["search_path"],q)
             if rp.can_fetch(UA,u):
                 budget-=1
@@ -131,6 +131,8 @@ def process_store(host,q,config,prior,deadline,budget):
             for i in range(0,len(pages),500):
                 db("crawl_pages",{"on_conflict":"url"},"POST",[{"url":u,"host":host} for u in pages[i:i+500]],"resolution=ignore-duplicates,return=minimal")
             candidates.update(u for u in pages if matches(u,q))
+        if not candidates:detail="no matching product URLs"
+        rejected=0
         for u in sorted(candidates,key=lambda u:(u not in known,-sum(t in u.lower() for t in terms),u))[:8]:
             if budget<=0 or time.monotonic()>deadline-20:break
             if urllib.parse.urlsplit(u).hostname!=host or not rp.can_fetch(UA,u):continue
@@ -141,7 +143,7 @@ def process_store(host,q,config,prior,deadline,budget):
                     p=Page();p.feed(raw.decode("utf8","replace"))
                     if not any("Product" in types(x) for x in walk(p.scripts)):offers=microdata(raw,u,host,stamp())
                 offers=[o for o in offers if matches(o["name"],q) or o.get("gtin")==q or (o.get("model") or "").lower()==q]
-                if not offers:continue
+                if not offers:rejected+=1;continue
                 send("offers",offers,"url,name")
                 for o in offers:
                     rows=db("offers",{"url":"eq."+o["url"],"name":"eq."+o["name"],"select":"id"})
@@ -152,6 +154,7 @@ def process_store(host,q,config,prior,deadline,budget):
             except urllib.error.HTTPError as e:
                 if e.code in (403,429):detail=error_detail(e);break
                 detail=error_detail(e)
+        if rejected and not found and detail=="ok":detail="no matching structured NOK offers on "+str(rejected)+" pages"
     except Exception as e:detail=error_detail(e)
     finally:
         if detail in ("HTTP 403","HTTP 429"):db("managed_stores",{"host":"eq."+host},"PATCH",{"paused_until":stamp(1)},"return=minimal")
