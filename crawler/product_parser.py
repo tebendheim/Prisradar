@@ -58,8 +58,12 @@ def price(x):
 
 def gtin(x):
     s=str(x or "")
-    if not re.fullmatch(r"(?:\d{8}|\d{12,14})",s):return None
+    if not re.fullmatch(r"(?:[0-9]{8}|[0-9]{12,14})",s) or not s.strip("0"):return None
     return s if (sum(int(d)*(3 if i%2==0 else 1) for i,d in enumerate(reversed(s[:-1])))+int(s[-1]))%10==0 else None
+
+def normalized_gtin(x):
+    g=gtin(x)
+    return g.zfill(14) if g else None
 
 def same_page(a,b):
     if not isinstance(a,str):return False
