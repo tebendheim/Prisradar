@@ -60,6 +60,23 @@ class Integration(unittest.TestCase):
         self.assertFalse(prices)
 
 class AdapterIntegration(unittest.TestCase):
+    def test_woo_minor_units(self):
+        row={"type":"simple","is_purchasable":True,"is_in_stock":True,"name":"Acme Mixer","prices":{"currency_code":"NOK","currency_minor_unit":2,"price":"699500"}}
+        self.assertEqual(store_adapters.woo_offer(row,HOST,URL)["price"],6995)
+        self.assertIsNone(store_adapters.woo_offer({**row,"type":"variable"},HOST,URL))
+        self.assertIsNone(store_adapters.woo_offer({**row,"prices":{**row["prices"],"currency_code":"USD"}},HOST,URL))
+    def test_platform_timeout(self):
+        rp=__import__("urllib.robotparser",fromlist=["RobotFileParser"]).RobotFileParser()
+        rp.parse(["User-agent: *","Disallow:"])
+        def fail(*args):raise TimeoutError()
+        self.assertEqual(store_adapters.public_search(HOST,"shopify",QUERY,rp,fail),[])
+    def test_feed_only_requested_products(self):
+        from merchant_feed import parse_feed,feed_offers
+        raw=b"title,link,price\nAcme,https://shop.example/products/acme,199 NOK\nOther,https://shop.example/products/other,99 NOK"
+        result=list(feed_offers(parse_feed(raw,BASE+"/feed.csv"),HOST,lambda x:x["n"]=="Acme"))
+        self.assertEqual(len(result),1)
+        self.assertEqual(result[0]["price"],199)
+
     def test_platform_search_urls(self):
         for raw,expected in [(HOME,"/search?q=Acme%20Headphones&type=product"),(b'<div class="woocommerce">Add to cart</div>',"/?s=Acme%20Headphones&post_type=product"),(b'<form action="/find"><input type="search" name="query"></form>',"/find?query=Acme%20Headphones")]:
             with self.subTest(expected=expected):
