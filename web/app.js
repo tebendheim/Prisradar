@@ -62,8 +62,9 @@ function groupOffers(rows){
  for(const r of rows){
   const g=gtinKey(r.gtin);
   const label=r.name.trim().replace(/\s+/g,' ');
-  const key=g?'gtin:'+g:'name:'+label.toLowerCase()+':'+(r.price_kind||'exact');
-  if(!groups.has(key))groups.set(key,{label,gtin:g,rows:[]});
+  const brand=String(r.brand||'').trim().toLowerCase(),mpn=String(r.mpn||'').trim().toUpperCase().replace(/\s+/g,'');
+  const key=g?'gtin:'+g:brand&&mpn&&r.price_kind==='exact'?'mpn:'+brand+':'+mpn:'name:'+label.toLowerCase()+':'+(r.price_kind||'exact');
+  if(!groups.has(key))groups.set(key,{label,gtin:g,mpn:!g&&key.startsWith('mpn:')?mpn:null,rows:[]});
   groups.get(key).rows.push(r);
  }
  return [...groups.values()];
@@ -71,9 +72,9 @@ function groupOffers(rows){
 function renderOffers(data,q){
  const root=$('results');root.replaceChildren();$('resultCount').textContent=data.length+' treff';const coverage=node('section','',root);showCoverage(coverage,q,searchVersion);if(isAdmin){const b=node('button','Oppdater priser nå',coverage);b.type='button';b.onclick=async()=>{b.disabled=true;try{const r=await client.rpc('refresh_search_v1',{q});if(r.error)throw r.error;chooseModel(q)}catch(e){fail(e);b.disabled=false}}}
  const groups=groupOffers(data);$('resultCount').textContent=groups.length+' produktgrupper · '+data.length+' tilbud';
- for(const g of groups){const section=node('section','',root);node('h3',g.label,section);node('small',(g.gtin?'GTIN '+g.gtin+' · ':'Navnebasert gruppe, identitet ikke bekreftet · ')+new Set(g.rows.map(r=>r.host)).size+' butikker',section);
+ for(const g of groups){const section=node('section','',root);node('h3',g.label,section);node('small',(g.gtin?'GTIN '+g.gtin+' · ':g.mpn?'MPN '+g.mpn+' · ':'Navnebasert gruppe, identitet ikke bekreftet · ')+new Set(g.rows.map(r=>r.host)).size+' butikker',section);
  for(const r of g.rows){
-  const card=node('article','',section);card.className='offer';const info=node('div','',card);node('strong',r.name,info);node('small',r.host,info);node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),info);link(info,r.url,'Åpne butikk');const price=node('div','',card);const amount=node('div',new Intl.NumberFormat('nb-NO',{maximumFractionDigits:2}).format(r.total_price??r.price)+' kr',price);amount.className='offer-price';if(r.price_kind==='from')node('small','Fra-pris – variant må kontrolleres',price);node('small',r.shipping==null?'Frakt ukjent':'Inkl. frakt',price);
+  const card=node('article','',section);card.className='offer';const info=node('div','',card);node('strong',r.name,info);node('small',r.host,info);node('small',(r.availability||'Ukjent lagerstatus')+' · kontrollert '+new Date(r.checked).toLocaleString('nb-NO'),info);link(info,r.url,'Åpne butikk');const price=node('div','',card);const amount=node('div',new Intl.NumberFormat('nb-NO',{maximumFractionDigits:2}).format(r.total_price??r.price)+' kr',price);amount.className='offer-price';if(r.stale)node('small','Prisen kan være utdatert',price);if(r.review_required)node('small','Ny pris avventer kontroll – viser forrige pris',price);if(r.price_kind==='from')node('small','Fra-pris – variant må kontrolleres',price);node('small',r.shipping==null?'Frakt ukjent':'Inkl. frakt',price);
  }}
  if(!data.length){node('p','Ingen dokumenterte treff ennå. Dette betyr ikke at varen ikke selges.',root);const b=node('button','Lagre som prisønske',root);b.type='button';b.onclick=()=>{showView('watches');$('watchQuery').value=q;$('target').focus()}}
 }
@@ -81,7 +82,7 @@ let lastQueueCheck=0;
 async function pollResults(q,version,deadline,previousAttempt,notice=''){
  if(version!==searchVersion||$('app').hidden)return;
  try{
-  const [offers,progress]=await Promise.all([client.rpc('search_offers_v2',{q,max_results:100}),client.rpc('search_progress_v1',{q})]);
+  const [offers,progress]=await Promise.all([client.rpc('search_offers_v3',{q,max_results:100}),client.rpc('search_progress_v1',{q})]);
   if(version!==searchVersion||$('app').hidden)return;
   if(offers.error)throw offers.error;
   renderOffers(offers.data,q);
@@ -100,7 +101,7 @@ $('searchForm').onsubmit=async e=>{
   if(selectedModel!==q){const names=await models(q);if(version!==searchVersion||$('app').hidden)return;if(names.length===1&&names[0].toLowerCase()===q.toLowerCase()){selectedModel=q}else if(names.length){renderModels(names,q);status('Velg modellen du vil sammenligne priser på.');return}}
   selectedModel=null;status('Henter priser …');
   const tracked=await client.rpc('touch_search_v1',{q});if(tracked.error)throw tracked.error;
-  const [offers,progress]=await Promise.all([client.rpc('search_offers_v2',{q,max_results:100}),client.rpc('search_progress_v1',{q})]);
+  const [offers,progress]=await Promise.all([client.rpc('search_offers_v3',{q,max_results:100}),client.rpc('search_progress_v1',{q})]);
   if(version!==searchVersion||$('app').hidden)return;
   if(offers.error)throw offers.error;
   renderOffers(offers.data,q);
@@ -122,7 +123,7 @@ const adminInfo=node('p','',crawlerPanel), runInfo=node('p','',crawlerPanel);
 const startButton=node('button','Start indeksering',crawlerPanel);
 const refreshButton=node('button','Oppdater status',crawlerPanel);
 startButton.type=refreshButton.type='button';runInfo.setAttribute('role','status');runInfo.setAttribute('aria-live','polite');
-const schemaPanel=node('section','',adminPanel);node('h3','Database og migreringer',schemaPanel);const schemaInfo=node('p','Ikke kontrollert ennå',schemaPanel);link(schemaPanel,'https://github.com/tebendheim/Prisradar/blob/main/supabase/migrations/2026112705.sql','Åpne nødvendig SQL-migrering');
+const schemaPanel=node('section','',adminPanel);node('h3','Database og migreringer',schemaPanel);const schemaInfo=node('p','Ikke kontrollert ennå',schemaPanel);link(schemaPanel,'https://github.com/tebendheim/Prisradar/blob/main/supabase/migrations/2026112706.sql','Åpne nødvendig SQL-migrering');
 const quotaPanel=node('section','',adminPanel);node('h3','Kjørekvote',quotaPanel);const quotaInfo=node('p','Henter kvote …',quotaPanel);const extraButton=node('button','Start ekstra kjøring',quotaPanel);extraButton.type='button';extraButton.disabled=true;node('small','Interne grenser, ikke GitHubs faktiske faktureringssaldo. Ekstra kjøringer bruker samme 30-dagerskvote.',quotaPanel);link(quotaPanel,'https://github.com/settings/billing','Se faktisk GitHub-forbruk');const logPanel=node('section','',adminPanel);node('h3','Kjørelogg',logPanel);link(logPanel,'https://github.com/tebendheim/Prisradar/actions','Alle GitHub-kjøringer');const runList=node('div','',logPanel);runList.id='runList';const reportList=node('div','',logPanel);
 const qualityPanel=node('details','',adminPanel);node('summary','Butikkstatistikk siste 7 dager',qualityPanel);const qualityList=node('div','',qualityPanel);async function loadQuality(){const r=await client.rpc('store_quality_v1');qualityList.replaceChildren();if(r.error){node('p',r.error.message,qualityList);return}for(const x of r.data||[])node('p',x.host+' · '+x.successful_runs+'/'+x.runs+' kjøringer med pristilbud · '+x.offers+' tilbud · '+x.detail,qualityList)}qualityPanel.ontoggle=()=>{if(qualityPanel.open)loadQuality()};
 const storesPanel=node('section','',adminPanel);node('h3','Nettbutikker',storesPanel);
