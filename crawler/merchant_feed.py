@@ -2,7 +2,9 @@
 import csv,io,xml.etree.ElementTree as ET
 import urllib.error
 from urllib.parse import urljoin,urlsplit
-from product_parser import gtin
+from product_parser import gtin,price
+from crawl import same_host
+import re
 from store_rank import categories
 from durable import db
 from collections import Counter
@@ -12,9 +14,23 @@ def clean(row,base):
     if not isinstance(name,str) or not isinstance(link,str) or not 2<=len(name.strip())<=500:return None
     try:
         url=urljoin(base,link);u=urlsplit(url)
-        if u.scheme!="https" or u.hostname!=urlsplit(base).hostname or u.username or u.password or u.port not in (None,443):return None
+        if u.scheme!="https" or not same_host(u.hostname,urlsplit(base).hostname) or u.username or u.password or u.port not in (None,443):return None
     except ValueError:return None
-    return {"n":name.strip(),"src":u._replace(fragment="").geturl(),"g":gtin(row.get("gtin"))}
+    result={"n":name.strip(),"src":u._replace(fragment="").geturl(),"g":gtin(row.get("gtin"))}
+    def nok(value):
+        m=re.fullmatch(r"\s*(.*?)\s+NOK\s*",str(value or ""),re.I)
+        if m:return price(m.group(1))
+        if str(row.get("currency") or row.get("price_currency") or "").upper()=="NOK":return price(value)
+        return None
+    regular=nok(row.get("price"))
+    sale=nok(row.get("sale_price"))
+    condition=str(row.get("condition") or "").lower()
+    if regular is not None and condition not in ("used","refurbished","damaged"):
+        result["price"]=regular
+        # A sale date range must be verified before using sale_price.
+        if sale is not None:result["sale_price"]=sale
+        result["availability"]={"in_stock":"InStock","out_of_stock":"OutOfStock","preorder":"PreOrder","backorder":"BackOrder"}.get(str(row.get("availability") or "").lower().replace(" ","_"),"")
+    return result
 
 def parse_feed(raw,base):
     text=raw.decode("utf-8-sig","replace")
