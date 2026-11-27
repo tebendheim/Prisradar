@@ -588,9 +588,9 @@ class DurableAndDemand(unittest.TestCase):
             with patch.object(demand,"db",return_value=health),self.assertRaises(SystemExit):demand.run()
         with patch.object(demand,"db",side_effect=http(404)),self.assertRaises(SystemExit):demand.run()
     def test_optional_assortment(self):
-        with patch.object(demand,"db",return_value=[]):self.assertEqual(demand.optional_assortment(),[])
-        with patch.object(demand,"db",side_effect=http(404)):self.assertEqual(demand.optional_assortment(),[])
-        with patch.object(demand,"db",side_effect=http(500)),self.assertRaises(urllib.error.HTTPError):demand.optional_assortment()
+        with patch.object(demand,"db_all",return_value=[]):self.assertEqual(demand.optional_assortment(),[])
+        with patch.object(demand,"db_all",side_effect=http(404)):self.assertEqual(demand.optional_assortment(),[])
+        with patch.object(demand,"db_all",side_effect=http(500)),self.assertRaises(urllib.error.HTTPError):demand.optional_assortment()
 
 class Migrations(unittest.TestCase):
     def migrations(self):return sorted((ROOT/"supabase"/"migrations").glob("2*.sql"))

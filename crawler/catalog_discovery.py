@@ -1,6 +1,6 @@
 """Bounded catalogue maintenance: product metadata only, no price writes."""
 import datetime,os,time,urllib.robotparser,urllib.error,urllib.parse,socket,ipaddress
-from durable import db,discover,stamp
+from durable import db,db_all,discover,stamp
 from crawl import fetch,UA,error_detail,load_robots,same_host
 from product_parser import Page,walk,types,same_page,gtin,product_hint
 from merchant_feed import cached_feed,learn_assortment
@@ -56,7 +56,7 @@ def run(deadline=None,budget=45):
     size=db("rpc/catalog_capacity_v1",None,"POST",{})
     if not size["allowed"]:
         print("Catalogue storage guard reached");return
-    stores=db("managed_stores",{"enabled":"eq.true","select":"host,paused_until,feed_path,search_path","limit":"500","order":"host.asc"})
+    stores=db_all("managed_stores",{"enabled":"eq.true","select":"host,paused_until,feed_path,search_path","order":"host.asc"})
     now=datetime.datetime.now(datetime.timezone.utc)
     stores=[s for s in stores if not s["paused_until"] or datetime.datetime.fromisoformat(s["paused_until"])<=now]
     if not stores:return

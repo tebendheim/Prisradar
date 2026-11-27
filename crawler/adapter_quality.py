@@ -1,7 +1,7 @@
 """Bounded adapter repair using known product identities, never generated code."""
 import time,urllib.error
 from crawl import fetch,load_robots,UA,extract,error_detail
-from durable import db,stamp,words
+from durable import db,db_all,stamp,words
 from store_adapters import profile,public_search
 from store_search import links,search_url
 from product_parser import normalized_gtin
@@ -48,7 +48,7 @@ def repair(host,config,references,deadline,fetcher=fetch,robots_loader=load_robo
     return None,"reference not verified"
 
 def run(deadline,limit=3):
-    stores=db("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until","limit":"500"})
+    stores=db_all("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until"})
     reports=db("crawl_reports",{"select":"host,detail,offers","order":"created.desc","limit":"500"})
     latest={}
     for row in reports:

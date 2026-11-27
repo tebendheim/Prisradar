@@ -1,6 +1,6 @@
 """Demand-driven crawler. Catalogue discovery is separate from price collection."""
 import os,re,datetime,urllib.parse,urllib.robotparser,urllib.error
-from durable import db,discover,stamp,words
+from durable import db,db_all,discover,stamp,words
 from crawl import fetch,UA,extract,send,error_detail,load_robots,same_host
 from product_parser import Page,walk,types,normalized_gtin
 from sources import microdata
@@ -54,7 +54,7 @@ def run():
 
 def optional_assortment():
     try:
-        return db("store_assortment",{"select":"host,category,samples","limit":"5000"})
+        return db_all("store_assortment",{"select":"host,category,samples"},cap=5000,order="host.asc,category.asc")
     except urllib.error.HTTPError as e:
         if e.code != 404:raise
         print("WARNING: store_assortment unavailable; using static ranking. Apply supabase/store_catalog_upgrade.sql",flush=True)
@@ -64,7 +64,7 @@ def process_one(deadline):
     jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":"1"})
     if not jobs:
         print("No active searches due");return False
-    job=jobs[0];q=job["query"];stores=db("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until,adapter,feed_path","limit":"500"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc) or x["host"].removeprefix("www.") in configurations()};hosts=list(config)
+    job=jobs[0];q=job["query"];stores=db_all("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until,adapter,feed_path"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc) or x["host"].removeprefix("www.") in configurations()};hosts=list(config)
     if not hosts: print("No enabled stores available");return False
     terms=[t for t in words(q) if t!="apple"] or words(q)
     # One global indexed lookup, not a network request to every shop.
@@ -109,7 +109,7 @@ def process_one(deadline):
     if not hosts:
         db("active_searches",{"query":"eq."+q},"PATCH",{"next_check":stamp(0.08)},"return=minimal");return False
     db("search_store_checks",{"on_conflict":"query,host"},"POST",[{"query":q,"host":h} for h in hosts],"resolution=ignore-duplicates,return=minimal")
-    checks=db("search_store_checks",{"query":"eq."+q,"select":"host,next_check,checked","limit":"500"})
+    checks=db_all("search_store_checks",{"query":"eq."+q,"select":"host,next_check,checked"},order="host.asc")
     due={x["host"] for x in checks if x["host"] in hosts and datetime.datetime.fromisoformat(x["next_check"])<=datetime.datetime.now(datetime.timezone.utc)}
     checked_hosts={x["host"] for x in checks if x.get("checked")}
     selected=sorted((h for h in hosts if h in due),key=lambda h:h in checked_hosts)[:min(24,max(1,int(os.environ.get("PAGE_BUDGET","60"))//3))]

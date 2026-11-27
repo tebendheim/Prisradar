@@ -16,6 +16,16 @@ def db(table,params=None,method="GET",body=None,prefer=None):
     u=base+"/rest/v1/"+table+("?"+urllib.parse.urlencode(params) if params else "")
     with opener.open(urllib.request.Request(u,headers=h,data=json.dumps(body).encode() if body is not None else None,method=method),timeout=20) as r:
         raw=r.read();return json.loads(raw) if raw else None
+def db_all(table,params=None,page=1000,cap=20000,order="host.asc"):
+    """GET all rows via limit/offset (PostgREST max-rows is 1000). Always sends a stable order. Stops at a short page or at cap."""
+    page=max(1,min(int(page),1000));base={k:v for k,v in dict(params or {}).items() if k not in("limit","offset")}
+    base.setdefault("order",order);rows=[]
+    while len(rows)<cap:
+        want=min(page,cap-len(rows))
+        got=db(table,dict(base,limit=str(want),offset=str(len(rows)))) or []
+        rows+=got
+        if len(got)<want:break
+    return rows
 def discover(host,rp,budget):
     maps=deque(rp.site_maps() or ["https://"+host+"/sitemap.xml"]);seen=set();pages=set()
     while maps and budget[0]>0 and len(seen)<6 and len(pages)<15000:

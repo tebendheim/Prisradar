@@ -28,6 +28,8 @@ def profile(raw,base):
     currency="NOK" if any(x.get("priceCurrency")=="NOK" for x in objects) or re.search(r'(?i)\bNOK\b',text) else "unknown"
     return {"search_path":path,"feed_candidates":feeds,"adapter":platform,"vat_status":vat,"currency_hint":currency,"shop":shop}
 
+MAX_STORES=2000
+
 def probe_candidates(deadline,limit=4):
     rows=db("store_candidates",{"select":"host,source","order":"probe_checked.asc.nullsfirst,host.asc","limit":str(limit),"probe_next":"lte."+stamp()})
     for row in rows:
@@ -43,7 +45,7 @@ def probe_candidates(deadline,limit=4):
             raw=fetch("https://"+h+"/",h,rp);p=profile(raw,"https://"+h+"/")
             # A search form alone is not proof of a shop.
             if not p["shop"]:result="no storefront evidence";continue
-            if db("managed_stores",{"select":"host","limit":"1","offset":"499"}):result="store limit reached";continue
+            if db("managed_stores",{"select":"host","limit":"1","offset":str(MAX_STORES-1)}):result="store limit reached";continue
             payload={k:p[k] for k in ("search_path","adapter","vat_status","currency_hint")}
             payload.update(host=h,enabled=True)
             db("managed_stores",{"on_conflict":"host"},"POST",[payload],"resolution=ignore-duplicates,return=minimal")
