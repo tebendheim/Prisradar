@@ -3,7 +3,7 @@ import datetime,os,time,urllib.robotparser,urllib.error,urllib.parse,socket,ipad
 from durable import db,discover,stamp
 from crawl import fetch,UA,error_detail,load_robots,same_host
 from product_parser import Page,walk,types,same_page,gtin,product_hint
-from merchant_feed import parse_feed,learn_assortment
+from merchant_feed import cached_feed,learn_assortment
 from sources import candidate_hosts
 from store_adapters import profile
 
@@ -71,7 +71,7 @@ def run(deadline=None,budget=45):
                 u="https://"+h+s["feed_path"]
                 if rp.can_fetch(UA,u):
                     budget-=1;count+=1
-                    try:found+=learn_batch(list(parse_feed(fetch(u,h,rp),u))[:1000],h)
+                    try:found+=learn_batch(cached_feed(u,h,rp,fetch)[:1000],h)
                     except urllib.error.HTTPError as e:
                         if e.code in (401,403,429):raise
                     except (ValueError,UnicodeError):pass
@@ -88,7 +88,7 @@ def run(deadline=None,budget=45):
                             if not rp.can_fetch(UA,"https://"+h+f):continue
                             budget-=1
                             try:
-                                items=list(parse_feed(fetch("https://"+h+f,h,rp),"https://"+h+f))[:1000]
+                                items=cached_feed("https://"+h+f,h,rp,fetch)[:1000]
                                 if items:found+=learn_batch(items,h);patch["feed_path"]=f;break
                             except urllib.error.HTTPError as e:
                                 if e.code in (401,403,429):raise
