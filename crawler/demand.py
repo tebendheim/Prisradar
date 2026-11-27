@@ -2,7 +2,7 @@
 import os,re,datetime,urllib.parse,urllib.robotparser,urllib.error
 from durable import db,db_all,discover,stamp,words
 from crawl import fetch,UA,extract,send,error_detail,load_robots,same_host
-from product_parser import Page,walk,types,normalized_gtin
+from product_parser import Page,walk,types,normalized_gtin,matched_terms
 from sources import microdata
 from store_search import search_url,links
 import socket,ipaddress,time
@@ -10,14 +10,19 @@ from catalog_seed import MODELS, URLS
 from store_rank import rank,relevant,categories,store_categories
 from merchant_feed import learn_assortment,cached_feed,feed_offers
 from affiliate_feed import affiliate_items,configurations
-from store_adapters import profile,probe_candidates,public_search
+from store_adapters import profile,probe_candidates,public_search,opensearch_path,API_ADAPTERS
 from concurrent.futures import ThreadPoolExecutor
 
+USED_WORDS=frozenset("brukt bruktvare used refurbished refurb renovert rekondisjonert demo demovare".split())
+# Accessories are only filtered for model-number queries (e.g. "iphone 15"), so "hdmi" still finds HDMI cables.
+ACCESSORY_WORDS=frozenset("deksel etui skjermbeskytter beskyttelsesfilm beskyttelsesglass lader ladekabel kabel case cover veske reim stativ holder reservedel reservedeler".split())
 def matches(text,q):
     terms=words(q)
-    tokens=set(words(urllib.parse.unquote(text)))
+    ordered=words(urllib.parse.unquote(text));tokens=set(ordered)
     required=[t for t in terms if t!="apple"] if "airpods" in terms else terms
-    if not required or not all(t in tokens for t in required):return False
+    if not required or not set(required)<=matched_terms(required,ordered):return False
+    if tokens&USED_WORDS-set(terms):return False
+    if any(re.search(r"\d",t) for t in terms) and tokens&ACCESSORY_WORDS-set(terms):return False
     if "airpods" in terms and any(t in tokens for t in ("deksel","reservedel","replacement","beskyttelsesetui","earhooks","earhook")) and not any(t in terms for t in ("deksel","reservedel","replacement","beskyttelsesetui","earhooks","earhook")):return False
     if "airpods" in terms and any(t.isdigit() for t in terms):
         model=re.search(r"airpods\s+(?:(?:pro|max)\s+)?(\d+)",text.lower())
@@ -27,7 +32,8 @@ def matches(text,q):
 def offer_matches(name,g,model,q):
     code=normalized_gtin(q.strip())
     if code:return normalized_gtin(g)==code
-    return matches(name,q) or bool(model and model.lower()==q.lower())
+    squash=lambda x:re.sub(r"[^a-z0-9æøå]","",str(x).lower())
+    return matches(name,q) or bool(model and squash(model) and squash(model)==squash(q))
 
 def run():
     deadline=time.monotonic()+run_seconds()
@@ -127,7 +133,7 @@ def process_one(deadline,seen=None,ctx=None):
     if "assortment" not in ctx:ctx["assortment"]=optional_assortment()
     for row in ctx["assortment"]:
         if row["category"] in categories(q):learned[row["host"]]=learned.get(row["host"],0)+row["samples"]
-    hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0))+(15 if config[h].get('feed_path') or config[h].get('adapter') in ('shopify','woocommerce') or h.removeprefix('www.') in configurations() else 0),reverse=True)
+    hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0))+(15 if config[h].get('feed_path') or config[h].get('adapter') in API_ADAPTERS or h.removeprefix('www.') in configurations() else 0),reverse=True)
     # Known unrelated stores are not searched without product-specific evidence.
     hosts=[h for h in hosts if relevant(h,q,len(evidence.get(h,[]))) or learned.get(h,0)]
     hosts.sort(key=lambda h:(bool(evidence.get(h)),bool(categories(q)&store_categories(h)),bool(learned.get(h,0))),reverse=True)
@@ -217,23 +223,39 @@ def process_store(host,q,config,prior,deadline,budget,ctx=None):
         if not candidates:candidates={x["url"] for x in db("crawl_pages",params)}
         known=[u for name,u in URLS if matches(name,q) and same_host(urllib.parse.urlsplit(u).hostname,host)]
         candidates.update(known)
-        if not config["search_path"] and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
-            budget-=1
+        # Detect platform and search path from the front page when no search path is known, and (once per run) when the
+        # adapter is still "generic" so that existing stores also get a platform adapter.
+        profiled=ctx.setdefault("profiled",set()) if ctx is not None else set()
+        generic=config.get("adapter") in (None,"","generic") and host not in profiled
+        if (not config["search_path"] or generic) and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
+            budget-=1;profiled.add(host)
             detected=profile(fetch("https://"+host+"/",host,rp),"https://"+host+"/")
             path=detected["search_path"]
-            patch={k:detected[k] for k in ("adapter","vat_status","currency_hint")}
-            if path and rp.can_fetch(UA,search_url(host,path,q)):
+            href=detected.get("opensearch")
+            if href and not re.fullmatch(r"/[\x21-\x7e]*",href):href=None
+            if not path and not config["search_path"] and href and budget>3 and rp.can_fetch(UA,"https://"+host+href):
+                budget-=1
+                try:path=opensearch_path(fetch("https://"+host+href,host,rp),"https://"+host+"/")
+                except urllib.error.HTTPError as e:
+                    if e.code in (401,403,429):raise
+                except Exception:path=None
+            patch={}
+            if not config["search_path"]:patch={k:detected[k] for k in ("adapter","vat_status","currency_hint")}
+            elif detected["adapter"]!="generic":patch={"adapter":detected["adapter"]}
+            if path and not config["search_path"] and rp.can_fetch(UA,search_url(host,path,q)):
                 patch["search_path"]=path;config["search_path"]=path
-            db("managed_stores",{"host":"eq."+host},"PATCH",patch,"return=minimal")
-            config["adapter"]=detected["adapter"]
-        if config.get("adapter") in ("shopify","woocommerce") and budget>3 and time.monotonic()<deadline-35:
+            if patch:db("managed_stores",{"host":"eq."+host},"PATCH",patch,"return=minimal")
+            config["adapter"]=patch.get("adapter",config.get("adapter"))
+        if config.get("adapter") in API_ADAPTERS and budget>3 and time.monotonic()<deadline-35:
             budget-=1
             api_offers=[]
             candidates.update(public_search(host,config["adapter"],q,rp,fetch,api_offers))
+            decided={o["url"] for o in api_offers}
             api_offers=[o for o in api_offers if offer_matches(o["name"],o.get("gtin"),o.get("model"),q)]
             if api_offers:
                 n=persist_offers(host,q,api_offers);found+=n;total+=n
-            api_urls={o["url"] for o in api_offers}
+            # A URL whose API offer was non-matching or accepted needs no HTML fetch.
+            api_urls=decided
         else:api_urls=set()
         if config["search_path"] and budget>2:
             u=search_url(host,config["search_path"],q)

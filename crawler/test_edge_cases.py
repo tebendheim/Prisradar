@@ -526,9 +526,10 @@ class PublicSearchAndWoo(unittest.TestCase):
     def test_woo_availability_variants(self):
         self.assertEqual(store_adapters.woo_offer(self.woo(is_in_stock=False),"a.no","u")["availability"],"OutOfStock")
         self.assertEqual(store_adapters.woo_offer(self.woo(is_in_stock=None),"a.no","u")["availability"],"")
-    def test_woo_offers_collected_in_search(self):
+    def test_woo_api_gives_urls_only(self):
+        # Store API prices may be ex. VAT with no flag: the product page JSON-LD supplies the price.
         offers=[];out=self.ps("woocommerce",[self.woo()],offers)
-        self.assertEqual(out,["https://a.no/p/1"]);self.assertEqual(offers[0]["price"],1299)
+        self.assertEqual(out,["https://a.no/p/1"]);self.assertEqual(offers,[])
     def test_profile_edge(self):
         for raw in (b"",b"<html>",b"\xff\xfe"):
             p=store_adapters.profile(raw,"https://a.no/");self.assertFalse(p["shop"]);self.assertEqual(p["currency_hint"],"unknown")

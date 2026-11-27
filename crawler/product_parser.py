@@ -56,6 +56,21 @@ def price(x):
         return float(p) if 0<p<=10000000 else None
     except InvalidOperation:return None
 
+def matched_terms(terms,tokens):
+    """Query terms found in `tokens` (ordered words), tolerating split/joined model codes:
+    'wh-1000xm5' ~ 'wh1000xm5' ~ 'wh 1000xm5'. Only adjacent tokens are merged, at token boundaries."""
+    toks=list(tokens);have=set(toks)
+    # Join only a letters-only token with a following token holding a digit (galaxy+s24, wh+1000xm5).
+    for i in range(len(toks)-1):
+        if toks[i].isalpha() and re.search(r"\d",toks[i+1]) and len(toks[i]+toks[i+1])>=4:have.add(toks[i]+toks[i+1])
+    hit={t for t in terms if t in have}
+    text=" ".join(toks)
+    for i in range(len(terms)-1):
+        run=terms[i:i+2]
+        if run[0].isalpha() and re.search(r"\d",run[1]):
+            if not all(t in hit for t in run) and re.search(r"(?<![a-z0-9æøå])"+" ?".join(map(re.escape,run))+r"(?![a-z0-9æøå])",text):hit.update(run)
+    return hit
+
 def gtin(x):
     s=str(x or "")
     if not re.fullmatch(r"(?:[0-9]{8}|[0-9]{12,14})",s) or not s.strip("0"):return None
@@ -118,6 +133,16 @@ def parse(raw,url,host,checked):
     def resolve(x):
         return refs.get(x.get("@id"),x) if isinstance(x,dict) and len(x)==1 else x
     products=[x for x in objects if "Product" in types(x)]
+    # ProductGroup (variants in hasVariant): one product with the variants' offers; the variants are not separate products.
+    variant_ids=set()
+    for g in [x for x in objects if "ProductGroup" in types(x) and isinstance(x.get("hasVariant"),list)]:
+        vs=[resolve(v) for v in g["hasVariant"] if isinstance(v,dict)]
+        vs=[v for v in vs if isinstance(v,dict)]
+        flat=[]
+        for v in vs:
+            variant_ids.add(id(v));o=v.get("offers",[]);flat+=o if isinstance(o,list) else [o]
+        if flat:products.append({**{k:val for k,val in g.items() if k!="hasVariant"},"@type":"Product","offers":flat})
+    products=[x for x in products if id(x) not in variant_ids]
     # Prefer explicit page identity; never index recommendation carousels as the current product.
     primary=[x for x in products if same_page(x.get("url"),url) or same_page(x.get("@id"),url)]
     if primary:products=primary
