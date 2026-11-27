@@ -12,10 +12,11 @@ def profile(raw,base):
     p=Page();p.feed(html)
     objects=list(walk(p.scripts))
     product=any("Product" in types(x) for x in objects)
-    shop=product or bool(re.search(r'(?i)(shopify|woocommerce|add.to.cart|legg i handlekurv|shopping.cart|handlekurv)',html))
+    shop=product or bool(re.search(r"(?i)(add.to.cart|legg i handlekurv|shopping.cart|handlekurv)",html))
     platform="generic"
     if re.search(r'cdn\.shopify\.com|Shopify\.shop',html,re.I):platform="shopify"
     elif re.search(r'woocommerce|wp-content/plugins/woocommerce',html,re.I):platform="woocommerce"
+    shop=shop or (platform!="generic" and bool(path))
     if not path:
         if platform=="shopify":path="/search?q={q}&type=product"
         elif platform=="woocommerce":path="/?s={q}&post_type=product"
@@ -32,7 +33,7 @@ def probe_candidates(deadline,limit=4):
         if time.monotonic()>deadline-35:break
         h=row["host"];result="unverified";patch={"probe_checked":stamp(),"probe_next":stamp(7)}
         try:
-            if not re.fullmatch(r"[a-z0-9.-]{4,150}",h) or not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(h,443,type=socket.SOCK_STREAM)):raise ValueError("invalid host")
+            if not re.fullmatch(r"(?=.{4,150}$)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}",h) or not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(h,443,type=socket.SOCK_STREAM)):raise ValueError("invalid host")
             if db("managed_stores",{"host":"eq."+h,"select":"host","limit":"1"}):
                 patch["probe_next"]=stamp(90);result="already registered";continue
             rp=urllib.robotparser.RobotFileParser()
@@ -42,6 +43,7 @@ def probe_candidates(deadline,limit=4):
             raw=fetch("https://"+h+"/",h,rp);p=profile(raw,"https://"+h+"/")
             # A search form alone is not proof of a shop.
             if not p["shop"]:result="no storefront evidence";continue
+            if db("managed_stores",{"select":"host","limit":"1","offset":"499"}):result="store limit reached";continue
             payload={k:p[k] for k in ("search_path","adapter","vat_status","currency_hint")}
             payload.update(host=h,enabled=True)
             db("managed_stores",{"on_conflict":"host"},"POST",[payload],"resolution=ignore-duplicates,return=minimal")
