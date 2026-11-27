@@ -93,16 +93,24 @@ def process_one(deadline):
     for row in optional_assortment():
         if row["category"] in categories(q):learned[row["host"]]=learned.get(row["host"],0)+row["samples"]
     hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0))+(15 if config[h].get('feed_path') or config[h].get('adapter') in ('shopify','woocommerce') or h.removeprefix('www.') in configurations() else 0),reverse=True)
-    preferred=[h for h in hosts if learned.get(h,0) or relevant(h,q,len(evidence.get(h,[])))]
     # Known unrelated stores are not searched without product-specific evidence.
     hosts=[h for h in hosts if relevant(h,q,len(evidence.get(h,[]))) or learned.get(h,0)]
     hosts.sort(key=lambda h:(bool(evidence.get(h)),bool(categories(q)&store_categories(h)),bool(learned.get(h,0))),reverse=True)
+    # Include relevant paused shops in coverage without contacting their storefronts.
+    paused=[x["host"] for x in stores if x["host"] not in config and relevant(x["host"],q,len(evidence.get(x["host"],[])))]
+    if paused:
+        db("search_store_checks",{"on_conflict":"query,host"},"POST",[{"query":q,"host":h} for h in paused],"resolution=ignore-duplicates,return=minimal")
+        for h in paused:
+            db("search_store_checks",{"query":"eq."+q,"host":"eq."+h},"PATCH",{"status":"paused","detail":"Midlertidig pause etter tilgangsbegrensning"},"return=minimal")
+    # Remove stale coverage for known unrelated shops, not historical reports.
+    for h in set(config)-set(hosts):
+        db("search_store_checks",{"query":"eq."+q,"host":"eq."+h},"DELETE",None,"return=minimal")
+    # Parallel across different shops, never parallel requests to the same shop.
     if not hosts:
         db("active_searches",{"query":"eq."+q},"PATCH",{"next_check":stamp(0.08)},"return=minimal");return False
-    # Parallel across different shops, never parallel requests to the same shop.
     db("search_store_checks",{"on_conflict":"query,host"},"POST",[{"query":q,"host":h} for h in hosts],"resolution=ignore-duplicates,return=minimal")
     checks=db("search_store_checks",{"query":"eq."+q,"select":"host,next_check,checked","limit":"500"})
-    due={x["host"] for x in checks if datetime.datetime.fromisoformat(x["next_check"])<=datetime.datetime.now(datetime.timezone.utc)}
+    due={x["host"] for x in checks if x["host"] in hosts and datetime.datetime.fromisoformat(x["next_check"])<=datetime.datetime.now(datetime.timezone.utc)}
     checked_hosts={x["host"] for x in checks if x.get("checked")}
     selected=sorted((h for h in hosts if h in due),key=lambda h:h in checked_hosts)[:min(24,max(1,int(os.environ.get("PAGE_BUDGET","60"))//3))]
     if not selected:
@@ -165,7 +173,7 @@ def process_store(host,q,config,prior,deadline,budget):
         if not candidates:candidates={x["url"] for x in db("crawl_pages",params)}
         known=[u for name,u in URLS if matches(name,q) and same_host(urllib.parse.urlsplit(u).hostname,host)]
         candidates.update(known)
-        if not candidates and not config["search_path"] and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
+        if not config["search_path"] and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
             budget-=1
             detected=profile(fetch("https://"+host+"/",host,rp),"https://"+host+"/")
             path=detected["search_path"]
