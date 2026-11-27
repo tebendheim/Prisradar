@@ -30,8 +30,8 @@ def offer_matches(name,g,model,q):
 def run():
     try:health=db("rpc/schema_health_v1",None,"POST",{})
     except urllib.error.HTTPError as e:
-        raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/2026112705.sql") from None
-    if not health.get("ready") or health.get("version",0)<2026112705:
+        raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/2026112706.sql") from None
+    if not health.get("ready") or health.get("version",0)<2026112706:
         raise SystemExit("Database migration required: "+str(health.get("missing",[])))
     db("rpc/prune_searches_v1",None,"POST",{})
     db("rpc/learn_catalog_batch_v1",None,"POST",{"items":[{"n":name,"src":source,"g":None} for name,source in MODELS]})
@@ -112,7 +112,8 @@ def process_one(deadline):
 
 def persist_offers(host,q,offers):
     if not offers:return 0
-    for o in offers:o.setdefault("price_kind","exact")
+    for o in offers:
+        o.setdefault("price_kind","exact");o.setdefault("brand",None);o.setdefault("mpn",None)
     send("offers",offers,"url,name")
     for o in offers:
         rows=db("offers",{"url":"eq."+o["url"],"name":"eq."+o["name"],"select":"id"})
