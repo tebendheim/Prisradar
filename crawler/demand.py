@@ -9,7 +9,7 @@ import socket,ipaddress,time
 from catalog_seed import MODELS, URLS
 from store_rank import rank,relevant,categories
 from merchant_feed import learn_assortment,cached_feed,feed_offers
-from affiliate_feed import affiliate_items
+from affiliate_feed import affiliate_items,configurations
 from store_adapters import profile,probe_candidates,public_search
 from concurrent.futures import ThreadPoolExecutor
 
@@ -41,7 +41,8 @@ def run():
         if time.monotonic()>search_deadline-35:break
         if not process_one(search_deadline):break
     if time.monotonic()<deadline-100:
-        probe_candidates(min(deadline-65,time.monotonic()+65),limit=4)
+        from adapter_quality import run as audit_adapters
+        audit_adapters(min(deadline-65,time.monotonic()+65),limit=2)
     if time.monotonic()<deadline-45:
         from catalog_discovery import run as discover_catalog
         try:discover_catalog(deadline=deadline,budget=60)
@@ -61,7 +62,7 @@ def process_one(deadline):
     jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":"1"})
     if not jobs:
         print("No active searches due");return False
-    job=jobs[0];q=job["query"];stores=db("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until,adapter,feed_path","limit":"500"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc)};hosts=list(config)
+    job=jobs[0];q=job["query"];stores=db("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until,adapter,feed_path","limit":"500"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc) or x["host"].removeprefix("www.") in configurations()};hosts=list(config)
     if not hosts: print("No enabled stores available");return False
     terms=[t for t in words(q) if t!="apple"] or words(q)
     # One global indexed lookup, not a network request to every shop.
@@ -134,6 +135,8 @@ def process_store(host,q,config,prior,deadline,budget):
             rows=list(feed_offers(affiliate_items(host),host,lambda x:offer_matches(x["n"],x.get("g"),None,q)))[:100]
             n=persist_offers(host,q,rows);found+=n;total+=n
         except (ValueError,OSError) as e:print(host,"affiliate feed unavailable",type(e).__name__,flush=True)
+        if config.get("paused_until") and datetime.datetime.fromisoformat(config["paused_until"])>datetime.datetime.now(datetime.timezone.utc):
+            detail="merchant paused; affiliate only";return total
         budget-=1
         rp=load_robots(host,fetch)
         feed=config.get("feed_path")
