@@ -44,11 +44,11 @@ async function showCoverage(root,q,version){
  const res=await client.rpc('store_search_status_v1',{q});
  if(version!==searchVersion||!root.isConnected)return;
  if(res.error){node('small','Butikkstatus utilgjengelig: '+res.error.message,root);return}
- const stores=res.data?.stores||[];const checked=stores.filter(s=>s.checked).length;
+ const stores=res.data?.stores||[];const checked=stores.filter(s=>s.checked&&s.status!=='paused').length;
  if(!stores.length){node('p','Søket venter på at crawleren skal opprette butikklisten.',root);return}
- node('p',checked+' av '+stores.length+' registrerte butikker forsøkt · '+stores.filter(s=>s.status==='found').length+' med treff',root);
+ node('p',checked+' av '+stores.length+' relevante butikker forsøkt · '+stores.filter(s=>s.status==='found').length+' med treff',root);
  const details=node('details','',root);node('summary','Vis butikkstatus',details);
- for(const s of stores)node('p',s.host+' · '+({pending:'Venter',found:'Treff',no_offer:'Ingen dokumentert pris',incomplete:'Ufullstendig'}[s.status]||s.status)+(s.detail?' · '+s.detail:''),details);
+ for(const s of stores)node('p',s.host+' · '+({pending:'Venter',found:'Treff',no_offer:'Ingen dokumentert pris',incomplete:'Ufullstendig',paused:'Midlertidig pauset'}[s.status]||s.status)+(s.detail?' · '+s.detail:''),details);
 }
 function gtinKey(value){
  const v=String(value??'');
