@@ -21,7 +21,7 @@ def matches(text,q):
 def run():
     try:health=db("rpc/schema_health_v1",None,"POST",{})
     except urllib.error.HTTPError as e:
-        raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/upgrade_through_2026112703.sql") from None
+        raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/upgrade_through_2026112704.sql") from None
     if not health.get("ready") or health.get("version",0)<2026112703:
         raise SystemExit("Database migration required: "+str(health.get("missing",[])))
     db("rpc/prune_searches_v1",None,"POST",{})
@@ -64,6 +64,8 @@ def process_one(deadline):
         evidence.setdefault(row["host"],[]).append(row["url"])
     for row in db("offers",[( "select","host,url"),("limit","300")]+[("name","ilike.*"+t+"*") for t in terms[:8]]):
         evidence.setdefault(row["host"],[]).append(row["url"])
+    for row in db("catalog_store_products",[("select","host,url"),("limit","1000")]+[("search_key","ilike.*"+t+"*") for t in terms[:8]]):
+        evidence.setdefault(row["host"],[]).append(row["url"])
     for name,u in URLS:
         if matches(name,q):evidence.setdefault(urllib.parse.urlsplit(u).hostname,[]).append(u)
     reports=db("crawl_reports",{"select":"host,offers","order":"created.desc","limit":"200"})
@@ -78,11 +80,16 @@ def process_one(deadline):
     preferred=[h for h in hosts if learned.get(h,0) or relevant(h,q,len(evidence.get(h,[])))]
     hosts=preferred+[h for h in hosts if h not in preferred]
     # Parallel across different shops, never parallel requests to the same shop.
-    selected=hosts[:24]
-    budget=min(120,int(os.environ.get("PAGE_BUDGET","60"))*2)
+    db("search_store_checks",{"on_conflict":"query,host"},"POST",[{"query":q,"host":h} for h in hosts],"resolution=ignore-duplicates,return=minimal")
+    checks=db("search_store_checks",{"query":"eq."+q,"select":"host,next_check","limit":"500"})
+    due={x["host"] for x in checks if datetime.datetime.fromisoformat(x["next_check"])<=datetime.datetime.now(datetime.timezone.utc)}
+    selected=[h for h in hosts if h in due][:48]
+    if not selected:
+        db("active_searches",{"query":"eq."+q},"PATCH",{"next_check":stamp(0.08)},"return=minimal");return True
+    budget=min(144,int(os.environ.get("PAGE_BUDGET","60"))*2)
     print("Ranked stores:",selected,flush=True)
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results=list(pool.map(lambda h:process_store(h,q,config[h],evidence.get(h,[]),deadline,max(4,budget//len(selected))),selected))
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        results=list(pool.map(lambda h:process_store(h,q,config[h],evidence.get(h,[]),min(deadline,time.monotonic()+65),max(3,budget//len(selected))),selected))
     total=sum(results)
     print("Search metrics: selected stores",len(selected),"offers",total,"seconds remaining",round(deadline-time.monotonic()),flush=True)
     db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(0.25 if total else 0.08)},"return=minimal")
@@ -157,6 +164,7 @@ def process_store(host,q,config,prior,deadline,budget):
                     rows=db("offers",{"url":"eq."+o["url"],"name":"eq."+o["name"],"select":"id"})
                     if rows:db("search_offer_links",{"on_conflict":"query,offer_id"},"POST",[{"query":q,"offer_id":r["id"]} for r in rows],"resolution=ignore-duplicates,return=minimal")
                     db("rpc/learn_catalog_v1",None,"POST",{"n":o["name"],"src":u,"g":o.get("gtin")})
+                db("rpc/index_store_products_v1",None,"POST",{"h":host,"items":[{"n":o["name"],"src":o["url"],"g":o.get("gtin")} for o in offers][:100]})
                 learn_assortment(host,[{"n":o["name"]} for o in offers])
                 found+=len(offers);total+=len(offers)
             except urllib.error.HTTPError as e:
@@ -167,6 +175,7 @@ def process_store(host,q,config,prior,deadline,budget):
     finally:
         if detail in ("HTTP 403","HTTP 429"):db("managed_stores",{"host":"eq."+host},"PATCH",{"paused_until":stamp(1)},"return=minimal")
         db("crawl_reports",None,"POST",{"host":host,"pages":count,"offers":found,"detail":detail},"return=minimal")
+        db("search_store_checks",{"query":"eq."+q,"host":"eq."+host},"PATCH",{"checked":stamp(),"next_check":stamp(0.25 if found else 0.08),"status":"found" if found else "no_offer" if count and detail=="ok" else "incomplete","offers":found,"detail":detail},"return=minimal")
         print(host,count,found,detail,flush=True)
     return total
 if __name__=="__main__":run()
