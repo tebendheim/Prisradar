@@ -60,6 +60,19 @@ class Integration(unittest.TestCase):
         self.assertFalse(prices)
 
 class AdapterIntegration(unittest.TestCase):
+    def test_external_feed_direct_destination(self):
+        from merchant_feed import clean
+        row={"product_name":"Mixer","merchant_deep_link":"https://shop.example/products/mixer","search_price":"199 NOK"}
+        self.assertEqual(clean(row,"https://feed.example/file",merchant_host="shop.example")["price"],199)
+        self.assertIsNone(clean(row,"https://feed.example/file"))
+    def test_external_feed_tracking_destination(self):
+        from merchant_feed import clean
+        from urllib.parse import quote
+        url="https://tracking.example/click?ued="+quote("https://shop.example/products/mixer",safe="")
+        row={"title":"Mixer","aw_deep_link":url,"price":"199 NOK"}
+        self.assertEqual(clean(row,"https://feed.example/file",merchant_host="shop.example")["src"],"https://shop.example/products/mixer")
+        self.assertIsNone(clean(row,"https://feed.example/file",merchant_host="other.example"))
+
     def test_normalized_gtin_matching(self):
         self.assertTrue(demand.offer_matches("Different title","4006381333931",None,"04006381333931"))
         self.assertFalse(demand.offer_matches("04006381333931","4006381333932",None,"04006381333931"))
