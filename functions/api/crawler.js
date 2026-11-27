@@ -15,12 +15,16 @@ export async function onRequest({request,env}){
  const user=await u.json();
  const m=await fetch(env.SUPABASE_URL+'/rest/v1/members?select=role&user_id=eq.'+encodeURIComponent(user.id),{headers});
  if(!m.ok||!(await m.json()).some(x=>x.role==='admin'))return json({error:'Kun administrator'},403);
+ const healthResponse=await fetch(env.SUPABASE_URL+'/rest/v1/rpc/schema_health_v1',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:'{}'});
+ const health=healthResponse.ok?await healthResponse.json():{ready:false,version:0,missing:['schema_health_v1 utilgjengelig (HTTP '+healthResponse.status+')']};
+ const ready=health.ready===true&&health.version>=2026112701;
+ if(method==='POST'&&!ready)return json({error:'Databasen må oppdateres: supabase/migrations/2026112701.sql',health},503);
  let gh;try{gh=await githubHeaders(env)}catch(e){return json({error:e.message.startsWith('GitHub')?e.message:'GitHub App-nøkkelen kunne ikke leses'},503)}
  const r=await fetch(repo+'/runs?per_page=10',{headers:gh});
  if(!r.ok)return json({error:'GitHub kunne ikke lese kjøringer',github_status:r.status},502);
  const runs=(await r.json()).workflow_runs||[];
  const active=runs.some(x=>x.status!=='completed');
- if(method==='GET')return json({active,runs:runs.map(x=>({id:x.id,status:x.status,conclusion:x.conclusion,created_at:x.created_at,updated_at:x.updated_at}))});
+ if(method==='GET')return json({active,health:{...health,ready},runs:runs.map(x=>({id:x.id,status:x.status,conclusion:x.conclusion,created_at:x.created_at,updated_at:x.updated_at}))});
  if(active)return json({error:'Crawleren kjører allerede'},409);
  let extra=false;try{const body=await request.json();extra=body.extra===true}catch{}
  const reservation=await fetch(env.SUPABASE_URL+'/rest/v1/rpc/reserve_crawl_v2',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({extra})});
