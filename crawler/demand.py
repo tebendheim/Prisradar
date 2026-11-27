@@ -2,13 +2,13 @@
 import os,re,datetime,urllib.parse,urllib.robotparser,urllib.error
 from durable import db,discover,stamp,words
 from crawl import fetch,UA,extract,send,error_detail,load_robots,same_host
-from product_parser import Page,walk,types
+from product_parser import Page,walk,types,normalized_gtin
 from sources import microdata
 from store_search import search_url,links
 import socket,ipaddress,time
 from catalog_seed import MODELS, URLS
 from store_rank import rank,relevant,categories
-from merchant_feed import learn_assortment,parse_feed,feed_offers
+from merchant_feed import learn_assortment,cached_feed,feed_offers
 from store_adapters import profile,probe_candidates,public_search
 from concurrent.futures import ThreadPoolExecutor
 
@@ -20,6 +20,11 @@ def matches(text,q):
         model=re.search(r"airpods\s+(?:(?:pro|max)\s+)?(\d+)",text.lower())
         if model and model.group(1) not in terms:return False
     return True
+
+def offer_matches(name,g,model,q):
+    code=normalized_gtin(q.strip())
+    if code:return normalized_gtin(g)==code
+    return matches(name,q) or bool(model and model.lower()==q.lower())
 
 def run():
     try:health=db("rpc/schema_health_v1",None,"POST",{})
@@ -68,6 +73,11 @@ def process_one(deadline):
         evidence.setdefault(row["host"],[]).append(row["url"])
     for row in db("catalog_store_products",[("select","host,url"),("limit","1000")]+[("search_key","ilike.*"+t+"*") for t in terms[:8]]):
         evidence.setdefault(row["host"],[]).append(row["url"])
+    code=normalized_gtin(q.strip())
+    if code:
+        for table in ("catalog_store_products","offers"):
+            for row in db(table,{"select":"host,url","gtin":"in.("+",".join(code[-n:] for n in (8,12,13,14) if code[:-n].strip("0")=="")+")","limit":"1000"}):
+                evidence.setdefault(row["host"],[]).append(row["url"])
     for name,u in URLS:
         if matches(name,q):evidence.setdefault(urllib.parse.urlsplit(u).hostname,[]).append(u)
     reports=db("crawl_reports",{"select":"host,offers","order":"created.desc","limit":"200"})
@@ -125,7 +135,7 @@ def process_store(host,q,config,prior,deadline,budget):
             if rp.can_fetch(UA,u):
                 budget-=1
                 try:
-                    rows=list(feed_offers(parse_feed(fetch(u,host,rp),u),host,lambda x:matches(x["n"],q) or (x.get("g") and x["g"].lstrip("0")==q.lstrip("0"))))[:100]
+                    rows=list(feed_offers(cached_feed(u,host,rp,fetch),host,lambda x:offer_matches(x["n"],x.get("g"),None,q)))[:100]
                     n=persist_offers(host,q,rows);found+=n;total+=n
                 except urllib.error.HTTPError as e:
                     if e.code in (401,403,429):raise
@@ -152,7 +162,7 @@ def process_store(host,q,config,prior,deadline,budget):
             budget-=1
             api_offers=[]
             candidates.update(public_search(host,config["adapter"],q,rp,fetch,api_offers))
-            api_offers=[o for o in api_offers if matches(o["name"],q) or (o.get("gtin") and o["gtin"].lstrip("0")==q.lstrip("0"))]
+            api_offers=[o for o in api_offers if offer_matches(o["name"],o.get("gtin"),o.get("model"),q)]
             if api_offers:
                 n=persist_offers(host,q,api_offers);found+=n;total+=n
             api_urls={o["url"] for o in api_offers}
@@ -191,7 +201,7 @@ def process_store(host,q,config,prior,deadline,budget):
                 if not offers:
                     p=Page();p.feed(raw.decode("utf8","replace"))
                     if not any("Product" in types(x) for x in walk(p.scripts)):offers=microdata(raw,u,host,stamp())
-                offers=[o for o in offers if matches(o["name"],q) or o.get("gtin")==q or (o.get("model") or "").lower()==q]
+                offers=[o for o in offers if offer_matches(o["name"],o.get("gtin"),o.get("model"),q)]
                 if not offers:rejected+=1;continue
                 persist_offers(host,q,offers)
                 found+=len(offers);total+=len(offers)
