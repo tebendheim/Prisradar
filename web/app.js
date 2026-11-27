@@ -90,6 +90,7 @@ const adminInfo=node('p','',crawlerPanel), runInfo=node('p','',crawlerPanel);
 const startButton=node('button','Start indeksering',crawlerPanel);
 const refreshButton=node('button','Oppdater status',crawlerPanel);
 startButton.type=refreshButton.type='button';runInfo.setAttribute('role','status');runInfo.setAttribute('aria-live','polite');
+const schemaPanel=node('section','',adminPanel);node('h3','Database og migreringer',schemaPanel);const schemaInfo=node('p','Ikke kontrollert ennå',schemaPanel);link(schemaPanel,'https://github.com/tebendheim/Prisradar/blob/main/supabase/migrations/2026112701.sql','Åpne nødvendig SQL-migrering');
 const quotaPanel=node('section','',adminPanel);node('h3','Kjørekvote',quotaPanel);const quotaInfo=node('p','Henter kvote …',quotaPanel);const extraButton=node('button','Start ekstra kjøring',quotaPanel);extraButton.type='button';extraButton.disabled=true;node('small','Interne grenser, ikke GitHubs faktiske faktureringssaldo. Ekstra kjøringer bruker samme 30-dagerskvote.',quotaPanel);link(quotaPanel,'https://github.com/settings/billing','Se faktisk GitHub-forbruk');const runList=node('div','',crawlerPanel);runList.id='runList';
 const storesPanel=node('section','',adminPanel);node('h3','Nettbutikker',storesPanel);
 const storeHost=node('input','',storesPanel);storeHost.placeholder='www.butikk.no';storeHost.setAttribute('aria-label','Butikkdomene');storeHost.autocapitalize='none';
@@ -121,7 +122,7 @@ async function refreshAdmin(){
  try{
   const [offers,coupons]=await Promise.all([client.from('offers').select('id',{count:'exact',head:true}),client.from('coupons').select('id',{count:'exact',head:true})]);
   adminInfo.textContent=(offers.error?'Ukjent':offers.count)+' produktoppføringer · '+(coupons.error?'ukjent':coupons.count)+' rabattkoder';
-  const reports=await client.from('crawl_reports').select('host,pages,offers,detail,created').order('created',{ascending:false}).limit(8);const data=await crawlerRequest('GET');runInfo.textContent=data.active?'Crawleren er i gang eller i kø.':'Ingen aktiv kjøring.';
+  const reports=await client.from('crawl_reports').select('host,pages,offers,detail,created').order('created',{ascending:false}).limit(8);const data=await crawlerRequest('GET');schemaInfo.textContent=data.health?.ready?'Database klar · versjon '+data.health.version:'Database må oppdateres · versjon '+(data.health?.version||0)+' · '+(data.health?.missing||[]).join(', ');runInfo.textContent=data.active?'Crawleren er i gang eller i kø.':'Ingen aktiv kjøring.';
   runList.replaceChildren();
   for(const r of data.runs.slice(0,5)){
    const row=node('p',new Date(r.created_at).toLocaleString('nb-NO')+' · '+(r.conclusion||r.status),runList);
@@ -129,9 +130,9 @@ async function refreshAdmin(){
   }
   if(!reports.error){for(const report of reports.data)node('p',report.host+' · '+report.pages+' sider · '+report.offers+' tilbud · '+report.detail,runList)}
   const quota=await refreshQuota();
-  startButton.disabled=data.active||!!(quota&&quota.normal_remaining===0);
-  extraButton.disabled=data.active||!quota||quota.extra_remaining===0;
- }catch(e){runInfo.textContent='Statusfeil: '+e.message;startButton.disabled=false}
+  startButton.disabled=!data.health?.ready||data.active||!!(quota&&quota.normal_remaining===0);
+  extraButton.disabled=!data.health?.ready||data.active||!quota||quota.extra_remaining===0;
+ }catch(e){runInfo.textContent='Statusfeil: '+e.message;startButton.disabled=true;extraButton.disabled=true;schemaInfo.textContent='Kontroll utilgjengelig: '+e.message}
  finally{adminBusy=false;refreshButton.disabled=false}
 }
 async function startCrawler(extra=false){if(adminBusy)return;adminBusy=true;startButton.disabled=true;extraButton.disabled=true;refreshButton.disabled=true;
@@ -140,7 +141,7 @@ async function startCrawler(extra=false){if(adminBusy)return;adminBusy=true;star
  try{await crawlerRequest('POST',extra);accepted=true;runInfo.textContent='Startforespørsel akseptert. Henter status …'}
  catch(e){runInfo.textContent='Kunne ikke starte: '+e.message}
  finally{adminBusy=false;refreshButton.disabled=false;startButton.textContent='Start indeksering';startButton.disabled=accepted}
- if(accepted)setTimeout(refreshAdmin,3000);else{const quota=await refreshQuota();extraButton.disabled=!quota||quota.extra_remaining===0;startButton.disabled=!!(quota&&quota.normal_remaining===0)}
+ if(accepted)setTimeout(refreshAdmin,3000);else{await refreshAdmin()}
 }
 startButton.onclick=()=>startCrawler(false);extraButton.onclick=()=>startCrawler(true);
 refreshButton.onclick=()=>{refreshAdmin();loadStores()};
