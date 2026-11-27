@@ -9,7 +9,7 @@ import socket,ipaddress,time
 from catalog_seed import MODELS, URLS
 from store_rank import rank,relevant,categories
 from merchant_feed import learn_assortment
-from store_adapters import profile,probe_candidates
+from store_adapters import profile,probe_candidates,public_search
 from concurrent.futures import ThreadPoolExecutor
 
 def matches(text,q):
@@ -55,7 +55,7 @@ def process_one(deadline):
     jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":"1"})
     if not jobs:
         print("No active searches due");return False
-    job=jobs[0];q=job["query"];stores=db("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until","limit":"500"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc)};hosts=list(config)
+    job=jobs[0];q=job["query"];stores=db("managed_stores",{"enabled":"eq.true","select":"host,search_path,paused_until,adapter,feed_path","limit":"500"});config={x["host"]:x for x in stores if not x["paused_until"] or datetime.datetime.fromisoformat(x["paused_until"])<=datetime.datetime.now(datetime.timezone.utc)};hosts=list(config)
     if not hosts: print("No enabled stores available");return False
     terms=[t for t in words(q) if t!="apple"] or words(q)
     # One global indexed lookup, not a network request to every shop.
@@ -124,6 +124,10 @@ def process_store(host,q,config,prior,deadline,budget):
             if path and rp.can_fetch(UA,search_url(host,path,q)):
                 patch["search_path"]=path;config["search_path"]=path
             db("managed_stores",{"host":"eq."+host},"PATCH",patch,"return=minimal")
+            config["adapter"]=detected["adapter"]
+        if config.get("adapter") in ("shopify","woocommerce") and budget>3 and time.monotonic()<deadline-35:
+            budget-=1
+            candidates.update(public_search(host,config["adapter"],q,rp,fetch))
         if config["search_path"] and budget>2:
             u=search_url(host,config["search_path"],q)
             if rp.can_fetch(UA,u):
