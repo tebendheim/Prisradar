@@ -15,14 +15,17 @@ from concurrent.futures import ThreadPoolExecutor
 def matches(text,q):
     terms=words(q)
     tokens=set(words(urllib.parse.unquote(text)))
-    terms=[t for t in terms if t!="apple"] or terms
-    return bool(terms) and all(t in tokens for t in terms)
+    if not terms or not all(t in tokens for t in terms):return False
+    if "airpods" in terms and any(t.isdigit() for t in terms):
+        model=re.search(r"airpods\s+(?:(?:pro|max)\s+)?(\d+)",text.lower())
+        if model and model.group(1) not in terms:return False
+    return True
 
 def run():
     try:health=db("rpc/schema_health_v1",None,"POST",{})
     except urllib.error.HTTPError as e:
-        raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/upgrade_through_2026112704.sql") from None
-    if not health.get("ready") or health.get("version",0)<2026112703:
+        raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/2026112704.sql") from None
+    if not health.get("ready") or health.get("version",0)<2026112704:
         raise SystemExit("Database migration required: "+str(health.get("missing",[])))
     db("rpc/prune_searches_v1",None,"POST",{})
     for name,source in MODELS:
