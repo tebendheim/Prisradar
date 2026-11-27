@@ -74,6 +74,43 @@ def product_hint(url):
     p=urlsplit(url).path.lower()
     return bool(re.search(r"/(?:product|products|produkt|produkter|p)/[^/]+|/p-\d+|/p/\d+|/\d{5,}(?:/|$)|/[^/]+\.html$",p))
 
+def documented_shipping(offer):
+    """Only unconditional flat NOK shipping explicitly applicable to Norway."""
+    rows=offer.get("shippingDetails",[])
+    if isinstance(rows,dict):rows=[rows]
+    values=[]
+    if not isinstance(rows,list):return None
+    for row in rows:
+        if not isinstance(row,dict):return None
+        dest=row.get("shippingDestination",{})
+        if not isinstance(dest,dict) or dest.get("addressCountry")!="NO" or any(dest.get(k) for k in ("addressRegion","postalCode","postalCodeRange")):return None
+        if any(row.get(k) for k in ("eligibleTransactionVolume","shippingRateSettings","doesNotShip","validForMemberTier")):return None
+        rate=row.get("shippingRate",{})
+        if not isinstance(rate,dict) or rate.get("currency")!="NOK":return None
+        value=rate.get("value")
+        if any(rate.get(k) is not None for k in ("minValue","maxValue")):return None
+        val=0 if str(value) in ("0","0.0","0.00") else price(value)
+        if val is None:return None
+        values.append(val)
+    return values[0] if values and len(set(values))==1 else None
+
+def conditional_prices(raw,url):
+    """Document member offers separately; never substitute for public prices."""
+    p=Page();p.feed(raw.decode("utf8","replace"))
+    for item in walk(p.scripts):
+        if "Product" not in types(item) or not same_page(item.get("url") or item.get("@id"),url):continue
+        offers=item.get("offers",[])
+        if isinstance(offers,dict):offers=[offers]
+        if not isinstance(offers,list):continue
+        for o in offers:
+            if not isinstance(o,dict) or not o.get("validForMemberTier") or o.get("eligibleQuantity"):continue
+            if o.get("priceCurrency")!="NOK":continue
+            val=price(o.get("price"))
+            tier=o["validForMemberTier"]
+            if isinstance(tier,dict):tier=tier.get("name") or tier.get("@id")
+            if val is not None and isinstance(tier,str) and tier.strip():
+                yield {"name":str(item.get("name",""))[:500],"price":val,"condition":tier[:300],"source":url}
+
 def parse(raw,url,host,checked):
     p=Page();p.feed(raw.decode("utf8","replace"))
     objects=list(walk(p.scripts))
@@ -121,14 +158,14 @@ def parse(raw,url,host,checked):
                     val=price(sp.get("price"))
                     if val is not None:break
             if val is None or o.get("validForMemberTier") or o.get("eligibleQuantity"):continue
-            candidates.append((val,"AggregatePrice" if aggregate else str(o.get("availability","")).split("/")[-1],aggregate))
+            candidates.append((val,"AggregatePrice" if aggregate else str(o.get("availability","")).split("/")[-1],aggregate,documented_shipping(o)))
         if not candidates:continue
         # A lowPrice alone is only a from-price, never a verified in-stock variant.
         in_stock=[c for c in candidates if c[1]=="InStock" and not c[2]]
-        val,availability,aggregate=min(in_stock or candidates,key=lambda c:c[0])
+        val,availability,aggregate,shipping=min(in_stock or candidates,key=lambda c:c[0])
         kind="from" if len(set(candidates))>1 or aggregate else "exact"
         brand=item.get("brand");brand=brand.get("name") if isinstance(brand,dict) else brand
-        results.append(dict(brand=brand[:200] if isinstance(brand,str) else None,mpn=item.get("mpn")[:200] if kind=="exact" and isinstance(item.get("mpn"),str) else None,url=url,name=name.strip()[:500],host=host,gtin=None if len(set(candidates))>1 or aggregate else next((g for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if (g:=gtin(item.get(k)))),None),model=str(item.get("mpn") or item.get("model") or "")[:200],price=val,price_kind=kind,shipping=None,availability=availability,checked=checked))
+        results.append(dict(brand=brand[:200] if isinstance(brand,str) else None,mpn=item.get("mpn")[:200] if kind=="exact" and isinstance(item.get("mpn"),str) else None,url=url,name=name.strip()[:500],host=host,gtin=None if len(set(candidates))>1 or aggregate else next((g for k in ("gtin13","gtin14","gtin12","gtin8","gtin") if (g:=gtin(item.get(k)))),None),model=str(item.get("mpn") or item.get("model") or "")[:200],price=val,price_kind=kind,shipping=shipping if kind=="exact" else None,availability=availability,checked=checked))
     if results:return results
     # Do not use metadata to override ambiguous or used structured offers.
     if products or any("Product" in types(x) for x in objects):return []
