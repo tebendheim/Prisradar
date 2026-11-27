@@ -8,7 +8,7 @@ from store_search import search_url,links
 import socket,ipaddress,time
 from catalog_seed import MODELS, URLS
 from store_rank import rank,relevant,categories
-from merchant_feed import learn_assortment
+from merchant_feed import learn_assortment,parse_feed,feed_offers
 from store_adapters import profile,probe_candidates,public_search
 from concurrent.futures import ThreadPoolExecutor
 
@@ -24,8 +24,8 @@ def matches(text,q):
 def run():
     try:health=db("rpc/schema_health_v1",None,"POST",{})
     except urllib.error.HTTPError as e:
-        raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/2026112704.sql") from None
-    if not health.get("ready") or health.get("version",0)<2026112704:
+        raise SystemExit("Database readiness check failed (HTTP "+str(e.code)+"). Apply supabase/migrations/2026112705.sql") from None
+    if not health.get("ready") or health.get("version",0)<2026112705:
         raise SystemExit("Database migration required: "+str(health.get("missing",[])))
     db("rpc/prune_searches_v1",None,"POST",{})
     db("rpc/learn_catalog_batch_v1",None,"POST",{"items":[{"n":name,"src":source,"g":None} for name,source in MODELS]})
@@ -99,6 +99,18 @@ def process_one(deadline):
     print("Search:",q,"offers:",total,flush=True)
     return True
 
+def persist_offers(host,q,offers):
+    if not offers:return 0
+    for o in offers:o.setdefault("price_kind","exact")
+    send("offers",offers,"url,name")
+    for o in offers:
+        rows=db("offers",{"url":"eq."+o["url"],"name":"eq."+o["name"],"select":"id"})
+        if rows:db("search_offer_links",{"on_conflict":"query,offer_id"},"POST",[{"query":q,"offer_id":r["id"]} for r in rows],"resolution=ignore-duplicates,return=minimal")
+        db("rpc/learn_catalog_v1",None,"POST",{"n":o["name"],"src":o["url"],"g":o.get("gtin")})
+    db("rpc/index_store_products_v1",None,"POST",{"h":host,"items":[{"n":o["name"],"src":o["url"],"g":o.get("gtin")} for o in offers][:100]})
+    learn_assortment(host,[{"n":o["name"]} for o in offers])
+    return len(offers)
+
 def process_store(host,q,config,prior,deadline,budget):
     if time.monotonic()>deadline-25:return 0
     total=0
@@ -107,6 +119,17 @@ def process_store(host,q,config,prior,deadline,budget):
         if not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)):raise ValueError("nonpublic store address")
         budget-=1
         rp=load_robots(host,fetch)
+        feed=config.get("feed_path")
+        if feed and budget>2 and feed.startswith("/") and not feed.startswith("//") and "\\" not in feed:
+            u="https://"+host+feed
+            if rp.can_fetch(UA,u):
+                budget-=1
+                try:
+                    rows=list(feed_offers(parse_feed(fetch(u,host,rp),u),host,lambda x:matches(x["n"],q) or (x.get("g") and x["g"].lstrip("0")==q.lstrip("0"))))[:100]
+                    n=persist_offers(host,q,rows);found+=n;total+=n
+                except urllib.error.HTTPError as e:
+                    if e.code in (401,403,429):raise
+                except (ValueError,OSError):pass
         # Previously known matching URLs are looked up server-side, not just the first 1000 rows.
         terms=[t for t in words(q) if t not in ("apple",) ] or words(q)
         params=[("host","eq."+host),("select","url"),("limit","40")]
@@ -163,13 +186,7 @@ def process_store(host,q,config,prior,deadline,budget):
                     if not any("Product" in types(x) for x in walk(p.scripts)):offers=microdata(raw,u,host,stamp())
                 offers=[o for o in offers if matches(o["name"],q) or o.get("gtin")==q or (o.get("model") or "").lower()==q]
                 if not offers:rejected+=1;continue
-                send("offers",offers,"url,name")
-                for o in offers:
-                    rows=db("offers",{"url":"eq."+o["url"],"name":"eq."+o["name"],"select":"id"})
-                    if rows:db("search_offer_links",{"on_conflict":"query,offer_id"},"POST",[{"query":q,"offer_id":r["id"]} for r in rows],"resolution=ignore-duplicates,return=minimal")
-                    db("rpc/learn_catalog_v1",None,"POST",{"n":o["name"],"src":u,"g":o.get("gtin")})
-                db("rpc/index_store_products_v1",None,"POST",{"h":host,"items":[{"n":o["name"],"src":o["url"],"g":o.get("gtin")} for o in offers][:100]})
-                learn_assortment(host,[{"n":o["name"]} for o in offers])
+                persist_offers(host,q,offers)
                 found+=len(offers);total+=len(offers)
             except urllib.error.HTTPError as e:
                 if e.code in (401,403,429):detail=error_detail(e);break
