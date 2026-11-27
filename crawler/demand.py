@@ -9,6 +9,7 @@ import socket,ipaddress,time
 from catalog_seed import MODELS, URLS
 from store_rank import rank,relevant,categories
 from merchant_feed import learn_assortment
+from store_adapters import profile,probe_candidates
 from concurrent.futures import ThreadPoolExecutor
 
 def matches(text,q):
@@ -27,10 +28,12 @@ def run():
     for name,source in MODELS:
         db("rpc/learn_catalog_v1",None,"POST",{"n":name,"src":source,"g":None})
     deadline=time.monotonic()+350
-    search_deadline=deadline-110
+    search_deadline=deadline-150
     for _ in range(3):
         if time.monotonic()>search_deadline-35:break
         if not process_one(search_deadline):break
+    if time.monotonic()<deadline-100:
+        probe_candidates(min(deadline-65,time.monotonic()+65),limit=4)
     if time.monotonic()<deadline-45:
         from catalog_discovery import run as discover_catalog
         try:discover_catalog(deadline=deadline,budget=60)
@@ -106,6 +109,14 @@ def process_store(host,q,config,prior,deadline,budget):
         if not candidates:candidates={x["url"] for x in db("crawl_pages",params)}
         known=[u for name,u in URLS if matches(name,q) and urllib.parse.urlsplit(u).hostname==host]
         candidates.update(known)
+        if not candidates and not config["search_path"] and budget>3 and rp.can_fetch(UA,"https://"+host+"/"):
+            budget-=1
+            detected=profile(fetch("https://"+host+"/",host,rp),"https://"+host+"/")
+            path=detected["search_path"]
+            patch={k:detected[k] for k in ("adapter","vat_status","currency_hint")}
+            if path and rp.can_fetch(UA,search_url(host,path,q)):
+                patch["search_path"]=path;config["search_path"]=path
+            db("managed_stores",{"host":"eq."+host},"PATCH",patch,"return=minimal")
         if not known and config["search_path"] and budget>2:
             u=search_url(host,config["search_path"],q)
             if rp.can_fetch(UA,u):
