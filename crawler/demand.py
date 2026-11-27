@@ -27,7 +27,18 @@ def run():
         if not process_one(deadline):break
     if time.monotonic()<deadline-45:
         from catalog_discovery import run as discover_catalog
-        discover_catalog(deadline=deadline,budget=30)
+        try:discover_catalog(deadline=deadline,budget=30)
+        except urllib.error.HTTPError as e:
+            if e.code not in (400,404):raise
+            print("WARNING: catalogue maintenance unavailable; check supabase/store_catalog_upgrade.sql (HTTP "+str(e.code)+")",flush=True)
+
+def optional_assortment():
+    try:
+        return db("store_assortment",{"select":"host,category,samples","limit":"5000"})
+    except urllib.error.HTTPError as e:
+        if e.code != 404:raise
+        print("WARNING: store_assortment unavailable; using static ranking. Apply supabase/store_catalog_upgrade.sql",flush=True)
+        return []
 
 def process_one(deadline):
     jobs=db("active_searches",{"next_check":"lte."+stamp(),"last_searched":"gte."+(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=123)).isoformat(),"order":"last_searched.desc,next_check.asc","limit":"1"})
@@ -52,7 +63,7 @@ def process_one(deadline):
     offset=int(os.environ.get("GITHUB_RUN_NUMBER","0"))%len(hosts)
     hosts=hosts[offset:]+hosts[:offset]
     learned={}
-    for row in db("store_assortment",{"select":"host,category,samples","limit":"5000"}):
+    for row in optional_assortment():
         if row["category"] in categories(q):learned[row["host"]]=learned.get(row["host"],0)+row["samples"]
     hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0)),reverse=True)
     preferred=[h for h in hosts if learned.get(h,0) or relevant(h,q,len(evidence.get(h,[])))]
