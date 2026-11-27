@@ -3,7 +3,8 @@ import re,urllib.parse,urllib.error,urllib.robotparser,socket,ipaddress,time
 from crawl import fetch,UA,error_detail,load_robots,same_host
 from durable import db,stamp
 from discover_settings import discover_paths
-from product_parser import Page,walk,types
+from product_parser import Page,walk,types,gtin,price
+from decimal import Decimal,InvalidOperation
 from store_search import links,search_url
 
 def profile(raw,base):
@@ -53,7 +54,7 @@ def probe_candidates(deadline,limit=4):
             db("store_candidates",{"host":"eq."+h},"PATCH",patch,"return=minimal")
             print("Candidate",h,result,flush=True)
 
-def public_search(host,adapter,q,rp,fetcher=fetch):
+def public_search(host,adapter,q,rp,fetcher=fetch,offers=None):
     """Only documented public storefront search endpoints; return product URLs, not guessed prices."""
     if adapter=="shopify":
         path="/search/suggest.json?"+urllib.parse.urlencode({"q":q,"resources[type]":"product","resources[limit]":10})
@@ -70,12 +71,33 @@ def public_search(host,adapter,q,rp,fetcher=fetch):
         result=[]
         for row in rows[:10]:
             if not isinstance(row,dict):continue
-            u=urllib.parse.urlsplit(urllib.parse.urljoin(url,row.get("url") or row.get("permalink") or ""))
+            href=row.get("url") or row.get("permalink")
+            if not isinstance(href,str) or not href:continue
+            u=urllib.parse.urlsplit(urllib.parse.urljoin(url,href))
             if u.scheme=="https" and same_host(u.hostname,host) and not u.username and not u.password and u.port in (None,443) and u.path not in ("/",path) and rp.can_fetch(UA,u.geturl()):
-                result.append(u._replace(fragment="").geturl())
+                product_url=u._replace(fragment="").geturl()
+                result.append(product_url)
+                if adapter=="woocommerce" and offers is not None:
+                    offer=woo_offer(row,host,product_url)
+                    if offer:offers.append(offer)
         return list(dict.fromkeys(result))
     except (ValueError,AttributeError,TypeError):return []
     except urllib.error.HTTPError as e:
         if e.code in (401,403,429):raise
         return []
     except (urllib.error.URLError,OSError):return []
+
+def woo_offer(row,host,url):
+    """Only explicit NOK simple products; ranges and variable products use HTML verification."""
+    if row.get("type")!="simple" or row.get("is_purchasable") is not True or row.get("has_options") or row.get("price_range"):return None
+    if row.get("condition") in ("used","refurbished","damaged"):return None
+    p=row.get("prices")
+    if not isinstance(p,dict) or p.get("currency_code")!="NOK" or p.get("price_range"):return None
+    n=row.get("name")
+    if not isinstance(n,str) or not n.strip():return None
+    unit=p.get("currency_minor_unit");raw=p.get("price")
+    if type(unit) is not int or not 0<=unit<=3 or not re.fullmatch(r"[0-9]+",str(raw)):return None
+    val=price(str(Decimal(str(raw)).scaleb(-unit)))
+    if val is None:return None
+    from html import unescape
+    return dict(url=url,name=unescape(n).strip()[:500],host=host,gtin=gtin(row.get("global_unique_id")),model="",price=val,price_kind="exact",shipping=None,availability="InStock" if row.get("is_in_stock") is True else "OutOfStock" if row.get("is_in_stock") is False else "",checked=stamp())
