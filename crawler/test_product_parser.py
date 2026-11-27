@@ -25,13 +25,15 @@ class ParserTests(unittest.TestCase):
     def test_variants(self):
         row=parse_page(page(product(offers=[{"price":99,"priceCurrency":"NOK"},{"price":199,"priceCurrency":"NOK"}])))[0]
         self.assertEqual(row["price"],99)
-        self.assertIn("fra-pris",row["name"])
+        self.assertEqual(row["name"],"Headphones")
+        self.assertEqual(row["price_kind"],"from")
     def test_used(self):
         self.assertFalse(parse_page(page(product(offers={"price":99,"priceCurrency":"NOK","itemCondition":"https://schema.org/UsedCondition"}))))
     def test_aggregate(self):
         row=parse_page(page(product(offers={"@type":"AggregateOffer","lowPrice":99,"priceCurrency":"NOK"})))[0]
         self.assertEqual(row["price"],99)
         self.assertEqual(row["availability"],"AggregatePrice")
+        self.assertEqual(row["price_kind"],"from")
     def test_members(self):
         self.assertFalse(parse_page(page(product(offers={"price":99,"priceCurrency":"NOK","validForMemberTier":"Gold"}))))
     def test_related(self):
