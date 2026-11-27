@@ -2,7 +2,7 @@ name: Bounded crawl
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 5 * * *'
+    - cron: '17 */2 * * *'
 permissions:
   contents: read
 concurrency:
@@ -22,7 +22,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          PAGE_BUDGET: '60'
+          PAGE_BUDGET: '120'
         run: |
           if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
             echo 'Supabase secrets not configured'
