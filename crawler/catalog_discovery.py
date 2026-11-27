@@ -5,7 +5,7 @@ from crawl import fetch,UA,error_detail
 from product_parser import Page,walk,types,same_page,gtin,product_hint
 from merchant_feed import parse_feed,learn_assortment
 from sources import candidate_hosts
-from discover_settings import discover_paths
+from store_adapters import profile
 
 def names(raw,url):
     p=Page();p.feed(raw.decode("utf8","replace"))
@@ -80,8 +80,8 @@ def run(deadline=None,budget=45):
                 budget-=1
                 try:
                     raw=fetch("https://"+h+"/",h,rp);found+=learn_batch(list_names(raw,"https://"+h+"/"),h)
-                    path,feeds=discover_paths(raw,"https://"+h+"/")
-                    patch={}
+                    detected=profile(raw,"https://"+h+"/");path=detected["search_path"];feeds=detected["feed_candidates"]
+                    patch={k:detected[k] for k in ("adapter","vat_status","currency_hint")}
                     if path and not s.get("search_path") and rp.can_fetch(UA,"https://"+h+path.replace("{q}","test")):patch["search_path"]=path
                     if not s.get("feed_path"):
                         for f in feeds:
