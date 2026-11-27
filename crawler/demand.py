@@ -28,8 +28,7 @@ def run():
     if not health.get("ready") or health.get("version",0)<2026112704:
         raise SystemExit("Database migration required: "+str(health.get("missing",[])))
     db("rpc/prune_searches_v1",None,"POST",{})
-    for name,source in MODELS:
-        db("rpc/learn_catalog_v1",None,"POST",{"n":name,"src":source,"g":None})
+    db("rpc/learn_catalog_batch_v1",None,"POST",{"items":[{"n":name,"src":source,"g":None} for name,source in MODELS]})
     deadline=time.monotonic()+350
     search_deadline=deadline-150
     for _ in range(3):
@@ -84,15 +83,16 @@ def process_one(deadline):
     hosts=preferred+[h for h in hosts if h not in preferred]
     # Parallel across different shops, never parallel requests to the same shop.
     db("search_store_checks",{"on_conflict":"query,host"},"POST",[{"query":q,"host":h} for h in hosts],"resolution=ignore-duplicates,return=minimal")
-    checks=db("search_store_checks",{"query":"eq."+q,"select":"host,next_check","limit":"500"})
+    checks=db("search_store_checks",{"query":"eq."+q,"select":"host,next_check,checked","limit":"500"})
     due={x["host"] for x in checks if datetime.datetime.fromisoformat(x["next_check"])<=datetime.datetime.now(datetime.timezone.utc)}
-    selected=[h for h in hosts if h in due][:min(48, max(1,int(os.environ.get("PAGE_BUDGET","60"))//2))]
+    checked_hosts={x["host"] for x in checks if x.get("checked")}
+    selected=sorted((h for h in hosts if h in due),key=lambda h:h in checked_hosts)[:min(24,max(1,int(os.environ.get("PAGE_BUDGET","60"))//3))]
     if not selected:
         db("active_searches",{"query":"eq."+q},"PATCH",{"next_check":stamp(0.08)},"return=minimal");return True
     budget=min(144,int(os.environ.get("PAGE_BUDGET","60"))*2)
     print("Ranked stores:",selected,flush=True)
     with ThreadPoolExecutor(max_workers=12) as pool:
-        results=list(pool.map(lambda h:process_store(h,q,config[h],evidence.get(h,[]),min(deadline,time.monotonic()+65),max(4,budget//len(selected))),selected))
+        results=list(pool.map(lambda h:process_store(h,q,config[h],evidence.get(h,[]),min(deadline,time.monotonic()+65),max(6,budget//len(selected))),selected))
     total=sum(results)
     print("Search metrics: selected stores",len(selected),"offers",total,"seconds remaining",round(deadline-time.monotonic()),flush=True)
     db("active_searches",{"query":"eq."+q},"PATCH",{"last_attempt":stamp(),"next_check":stamp(0.02 if len(due)>len(selected) else 0.25 if total else 0.08)},"return=minimal")
