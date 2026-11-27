@@ -9,6 +9,7 @@ import socket,ipaddress,time
 from catalog_seed import MODELS, URLS
 from store_rank import rank,relevant,categories
 from merchant_feed import learn_assortment,cached_feed,feed_offers
+from affiliate_feed import affiliate_items
 from store_adapters import profile,probe_candidates,public_search
 from concurrent.futures import ThreadPoolExecutor
 
@@ -127,6 +128,11 @@ def process_store(host,q,config,prior,deadline,budget):
     count=0;found=0;detail="ok"
     try:
         if not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)):raise ValueError("nonpublic store address")
+        # An independently authorised affiliate feed is not a request to the merchant.
+        try:
+            rows=list(feed_offers(affiliate_items(host),host,lambda x:offer_matches(x["n"],x.get("g"),None,q)))[:100]
+            n=persist_offers(host,q,rows);found+=n;total+=n
+        except (ValueError,OSError) as e:print(host,"affiliate feed unavailable",type(e).__name__,flush=True)
         budget-=1
         rp=load_robots(host,fetch)
         feed=config.get("feed_path")
