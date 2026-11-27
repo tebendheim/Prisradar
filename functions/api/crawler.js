@@ -17,8 +17,8 @@ export async function onRequest({request,env}){
  if(!m.ok||!(await m.json()).some(x=>x.role==='admin'))return json({error:'Kun administrator'},403);
  const healthResponse=await fetch(env.SUPABASE_URL+'/rest/v1/rpc/schema_health_v1',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:'{}'});
  const health=healthResponse.ok?await healthResponse.json():{ready:false,version:0,missing:['schema_health_v1 utilgjengelig (HTTP '+healthResponse.status+')']};
- const ready=health.ready===true&&health.version>=2026112704;
- if(method==='POST'&&!ready)return json({error:'Databasen må oppdateres: supabase/migrations/2026112704.sql',health},503);
+ const ready=health.ready===true&&health.version>=2026112705;
+ if(method==='POST'&&!ready)return json({error:'Databasen må oppdateres: supabase/migrations/2026112705.sql',health},503);
  let gh;try{gh=await githubHeaders(env)}catch(e){return json({error:e.message.startsWith('GitHub')?e.message:'GitHub App-nøkkelen kunne ikke leses'},503)}
  const r=await fetch(repo+'/runs?per_page=10',{headers:gh});
  if(!r.ok)return json({error:'GitHub kunne ikke lese kjøringer',github_status:r.status},502);
