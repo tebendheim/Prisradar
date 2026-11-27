@@ -60,6 +60,11 @@ class Integration(unittest.TestCase):
         self.assertFalse(prices)
 
 class AdapterIntegration(unittest.TestCase):
+    def test_airpods_optional_brand(self):
+        self.assertTrue(demand.matches('AirPods Pro 3','Apple AirPods Pro 3'))
+        self.assertFalse(demand.matches('AirPods Pro 3 deksel','Apple AirPods Pro 3'))
+        self.assertFalse(demand.matches('AirPods Pro 2','Apple AirPods Pro 3'))
+
     def test_external_feed_direct_destination(self):
         from merchant_feed import clean
         row={"product_name":"Mixer","merchant_deep_link":"https://shop.example/products/mixer","search_price":"199 NOK"}
