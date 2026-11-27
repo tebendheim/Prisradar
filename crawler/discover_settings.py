@@ -2,6 +2,7 @@
 from html.parser import HTMLParser
 from urllib.parse import urlsplit,urljoin,urlencode
 import re
+from crawl import same_host
 class Discovery(HTMLParser):
     def __init__(self):
         super().__init__();self.form=None;self.paths=[];self.feeds=[]
@@ -28,7 +29,7 @@ class Discovery(HTMLParser):
 def safe_relative(base,href):
     try:
         u=urlsplit(urljoin(base,href))
-        if u.scheme!="https" or u.hostname!=urlsplit(base).hostname or u.username or u.password or u.port not in (None,443):return None
+        if u.scheme!="https" or not same_host(u.hostname,urlsplit(base).hostname) or u.username or u.password or u.port not in (None,443):return None
         p=u.path or "/"
         if p.startswith("//") or "\\" in p:return None
         return p+("?" +u.query if u.query else "")
