@@ -29,7 +29,7 @@ def fetch_once(url,host,robots=None):
             if len(raw)>12000000: raise ValueError("decompressed response too large")
         return raw
 def error_detail(e):
-    return "HTTP "+str(e.code) if isinstance(e,urllib.error.HTTPError) else type(e).__name__
+    return "HTTP "+str(e.code) if isinstance(e,urllib.error.HTTPError) else (type(e).__name__+": "+str(e)[:160] if isinstance(e,ValueError) else type(e).__name__)
 def extract(raw,url,host):
     yield from parse(raw,url,host,time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()))
 def coupon_extract(raw,host,url):
