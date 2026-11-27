@@ -2,8 +2,10 @@
 
 Repoet skal kunne gjøres privat. GitHub Free gir da 2000 minutter per måned, og hver jobb
 rundes opp til hele minutter. Testen regner verste tilfelle for planlagte kjøringer
-(antall kjøringer per måned × timeout-minutes) og feiler hvis summen overstiger budsjettet.
-Resten (quality.yml ved push og manuelle kjøringer) har en reserve på 300 minutter.
+(antall kjøringer per måned × timeout-minutes) pluss manuelle kjøringer, som leses fra
+kommentarlinjen `-- actions-budget: manual_runs_per_30d=N minutes_per_run=M` i den høyeste
+migreringsfilen som har den. Summen må være maks 1760 min/mnd, slik at 240 min er igjen til
+quality.yml ved push.
 """
 import re
 import unittest
@@ -11,8 +13,9 @@ from pathlib import Path
 
 WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 MONTHLY_FREE_MINUTES = 2000
-RESERVE_FOR_PUSH_AND_MANUAL = 300
-SCHEDULED_BUDGET = MONTHLY_FREE_MINUTES - RESERVE_FOR_PUSH_AND_MANUAL
+RESERVE_FOR_QUALITY_PUSH = 240
+SCHEDULED_AND_MANUAL_BUDGET = MONTHLY_FREE_MINUTES - RESERVE_FOR_QUALITY_PUSH  # 1760
+MIGRATIONS = WORKFLOWS.parent.parent / "supabase" / "migrations"
 DAYS_PER_MONTH = 31
 
 
@@ -54,20 +57,30 @@ def scheduled_minutes(text):
     return sum(runs_per_month(c) for c in crons) * sum(timeouts)
 
 
+def manual_minutes():
+    for path in sorted(MIGRATIONS.glob("*.sql"), reverse=True):
+        m = re.search(r"^--\s*actions-budget:\s*manual_runs_per_30d=(\d+)\s+minutes_per_run=(\d+)\s*$", path.read_text(), re.M)
+        if m:
+            return int(m[1]) * int(m[2])
+    raise AssertionError("Ingen migrering har kommentarlinjen '-- actions-budget: manual_runs_per_30d=N minutes_per_run=M'")
+
+
 class ActionsBudgetTest(unittest.TestCase):
     def test_cron_parser(self):
         self.assertEqual(runs_per_month("17 */4 * * *"), 6 * 31)
         self.assertEqual(runs_per_month("43 5 * * *"), 31)
         self.assertEqual(runs_per_month("0,30 */2 * * *"), 24 * 31)
 
-    def test_scheduled_workflows_fit_private_free_tier(self):
+    def test_scheduled_plus_manual_fit_private_free_tier(self):
         usage = {p.name: scheduled_minutes(p.read_text()) for p in sorted(WORKFLOWS.glob("*.y*ml"))}
-        total = sum(usage.values())
+        scheduled = sum(usage.values())
+        manual = manual_minutes()
         self.assertLessEqual(
-            total,
-            SCHEDULED_BUDGET,
-            f"Planlagte workflows kan bruke {total} min/mnd i verste fall {usage}, "
-            f"budsjett {SCHEDULED_BUDGET} (privat repo: {MONTHLY_FREE_MINUTES} gratis).",
+            scheduled + manual,
+            SCHEDULED_AND_MANUAL_BUDGET,
+            f"Planlagt {scheduled} {usage} + manuelt {manual} min/mnd i verste fall, "
+            f"budsjett {SCHEDULED_AND_MANUAL_BUDGET} (privat repo: {MONTHLY_FREE_MINUTES} gratis, "
+            f"{RESERVE_FOR_QUALITY_PUSH} reservert til quality.yml).",
         )
 
     def test_every_job_has_timeout(self):

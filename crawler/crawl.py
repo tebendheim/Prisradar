@@ -2,7 +2,7 @@
 import os,json,time,re,gzip,io,urllib.request,urllib.error,urllib.parse,urllib.robotparser,xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from collections import deque
-from product_parser import parse, product_hint
+from product_parser import parse, product_hint, conditional_prices
 import random, socket, ipaddress, threading
 UA="PrisRadar/4.1 (+https://prisradar.pages.dev)"
 _rate_lock=threading.Lock()
@@ -60,7 +60,14 @@ def fetch_once(url,host,robots=None):
 def error_detail(e):
     return "HTTP "+str(e.code) if isinstance(e,urllib.error.HTTPError) else (type(e).__name__+": "+str(e)[:160] if isinstance(e,ValueError) else type(e).__name__)
 def extract(raw,url,host):
-    yield from parse(raw,url,host,time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()))
+    offers=list(parse(raw,url,host,time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime())))
+    if not offers:return
+    # Medlemspriser dokumenteres separat i member_prices; price/price_kind er alltid offentlig pris.
+    try:members=list(conditional_prices(raw,url))
+    except Exception:members=[]
+    for o in offers:
+        o["member_prices"]=[{"price":m["price"],"condition":m["condition"],"source":m["source"]} for m in members if m["name"].strip()==o["name"]][:5]
+        yield o
 def coupon_extract(raw,host,url):
     class Visible(HTMLParser):
         def __init__(self):super().__init__();self.hidden=0;self.parts=[]
@@ -71,7 +78,7 @@ def coupon_extract(raw,host,url):
         def handle_data(self,s):
             if not self.hidden:self.parts.append(s)
     p=Visible();p.feed(raw.decode("utf8","replace"));text=" ".join(p.parts)
-    for m in re.finditer(r"(?:rabattkode|kampanjekode|coupon code)\s*[:–=]?\s*([A-Z0-9][A-Z0-9_-]{3,24})\b",text):
+    for m in re.finditer(r"(?i:rabattkode|kampanjekode|coupon code)\s*[:–=]?\s*([A-Z0-9][A-Z0-9_-]{3,24})\b",text):
         if m[1] in ("RABATT","KODE","BRUK","HER","NOK"):continue
         yield dict(host=host,code=m[1],source=url,context=text[max(0,m.start()-60):m.end()+90],status="discovered")
 def send(table,rows,conflict):

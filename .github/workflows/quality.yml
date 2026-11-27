@@ -1,6 +1,7 @@
 name: Offline quality checks
 on:
   push:
+    branches: [main]
     paths:
       - 'crawler/**'
       - 'functions/**'
@@ -27,6 +28,7 @@ jobs:
         run: python -m unittest discover -s crawler -v
       - name: JavaScript syntax
         run: |
-          for f in web/app.js functions/api/crawler.js; do
+          shopt -s globstar nullglob
+          for f in web/*.js functions/**/*.js; do
             node --input-type=module --check < "$f"
           done

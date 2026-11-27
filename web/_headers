@@ -3,4 +3,5 @@
   Referrer-Policy: no-referrer
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), microphone=(), geolocation=()
-  Cache-Control: no-store
+  Cache-Control: no-cache
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://esm.sh; style-src 'self'; img-src 'self' data: https:; connect-src 'self' https://dinxtqwhhvmjpkybcjme.supabase.co; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'; manifest-src 'self'

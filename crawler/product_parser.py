@@ -48,9 +48,9 @@ def types(x):
 def price(x):
     if isinstance(x,bool) or x is None:return None
     s=str(x).strip().replace("\u00a0","").replace("\u202f","").replace(" ","")
-    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+,\d{1,2}",s):s=s.replace(".","").replace(",",".")
-    elif re.fullmatch(r"\d+,\d{1,2}",s):s=s.replace(",",".")
-    if not re.fullmatch(r"\d+(?:\.\d{1,2})?",s):return None
+    if re.fullmatch(r"[0-9]{1,3}(?:\.[0-9]{3})+,[0-9]{1,2}",s):s=s.replace(".","").replace(",",".")
+    elif re.fullmatch(r"[0-9]+,[0-9]{1,2}",s):s=s.replace(",",".")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]{1,2})?",s):return None
     try:
         p=Decimal(s)
         return float(p) if 0<p<=10000000 else None
@@ -129,6 +129,7 @@ def parse(raw,url,host,checked):
         if item.get("url") and not same_page(item["url"],url):continue
         offers=item.get("offers",[])
         if isinstance(offers,dict):offers=[offers]
+        if not isinstance(offers,list):offers=[]
         candidates=[]
         inherited=item.get("priceCurrency") or p.meta.get("product:price:currency") or p.meta.get("og:price:currency")
         expanded=[]
@@ -138,6 +139,7 @@ def parse(raw,url,host,checked):
             if "AggregateOffer" in types(o):
                 nested=o.get("offers",[])
                 if isinstance(nested,dict):nested=[nested]
+                if not isinstance(nested,list):nested=[]
                 if nested:
                     for child in nested:
                         child=resolve(child)
