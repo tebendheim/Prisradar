@@ -9,11 +9,19 @@
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__list_migrations",
+      "mcp__supabase__list_extensions",
+      "mcp__supabase__get_advisors",
+      "mcp__supabase__get_logs",
+      "mcp__supabase__search_docs"
     ],
     "ask": [
       "Bash(git push:*)",
-      "Bash(python crawler/demand.py:*)"
+      "Bash(python crawler/demand.py:*)",
+      "mcp__supabase__apply_migration",
+      "mcp__supabase__execute_sql"
     ],
     "deny": [
       "Read(./.env)",
@@ -31,7 +39,10 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/usage_tracker.py\" gate" }
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/usage_tracker.py\" gate"
+          }
         ]
       }
     ],
@@ -39,9 +50,15 @@
       {
         "matcher": "Agent|Task",
         "hooks": [
-          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/usage_tracker.py\" gate" }
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/usage_tracker.py\" gate"
+          }
         ]
       }
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
 }

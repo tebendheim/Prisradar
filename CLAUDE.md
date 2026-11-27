@@ -33,3 +33,10 @@ Statuslinjen viser `Prisradar X%/20% av uka`. Hooks i `.claude/settings.json` va
 ## Lokal kjøring
 - Offline tester: `python -m unittest discover -s crawler`
 - Mot ekte Supabase: legg `SUPABASE_URL` og `SUPABASE_SERVICE_ROLE_KEY` i `.env` (gitignored), kjør `set -a; . ./.env; set +a; PAGE_BUDGET=20 python crawler/demand.py`
+
+## Supabase via MCP
+`.mcp.json` kobler Claude til Supabase-prosjektet (OAuth, ingen nøkler i repo). Første gang: kjør `/mcp` og logg inn.
+- Lesing (`list_tables`, `list_migrations`, `get_advisors`, `get_logs`, `search_docs`) er tillatt uten spørsmål.
+- `apply_migration` og `execute_sql` krever brukerens godkjenning hver gang. Bare prosjektleder anvender migreringer, og bare filer fra `supabase/migrations/` som er godkjent av `tester` og `sikkerhet`.
+- Rekkefølge: migrering anvendes og `schema_health_v1` er `ready` → først da pushes kode som krever ny versjon.
+- Aldri `execute_sql` for å slette eller endre data eller skjema. All skjemaendring går via migreringsfil.

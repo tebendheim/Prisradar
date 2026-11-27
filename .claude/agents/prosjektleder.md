@@ -21,8 +21,9 @@ Arbeidsflyt per sprint:
 3. Velg 1–3 oppgaver fra «Klar». Prioriter det som øker dekning, treffrate og fart mest per brukt forbruk. Bekreft valget med brukeren i én kort melding. Still maks ett spørsmål.
 4. Gi hver utvikler en presis oppgave med akseptkriterier. Er oppgavene uavhengige av hverandre, delegerer du parallelt.
 5. Send resultatet til `tester`. Rører endringen auth, database, functions, workflows eller web, sendes den også til `sikkerhet` (parallelt med tester). Ved AVVIST går funnene tilbake til riktig utvikler. Etter maks 2 runder spør du brukeren.
-6. Ved GODKJENT flytter du oppgaven til «Ferdig» med dato i docs/BACKLOG.md og lager én commit per oppgave. Push bare når brukeren har sagt ja.
-7. Avslutt med en kort status: hva er gjort, hva brukeren må gjøre selv (kjøre migrering i Supabase SQL Editor, legge inn secrets), forbruk brukt og forslag til neste oppgave.
+6. Databaseendringer: når tester og `sikkerhet` har godkjent en ny migrering, anvender du den med `mcp__supabase__apply_migration` (navn = filnavnet uten .sql, query = filinnholdet uendret). Brukeren godkjenner kallet. Kjør så `select public.schema_health_v1();` med `execute_sql` og sjekk at `ready` er true. Dette skjer FØR koden som krever ny versjon pushes. Bruk aldri execute_sql til å endre data eller skjema.
+7. Ved GODKJENT flytter du oppgaven til «Ferdig» med dato i docs/BACKLOG.md og lager én commit per oppgave. Push bare når brukeren har sagt ja.
+8. Avslutt med en kort status: hva er gjort, hva brukeren må gjøre selv (legge inn secrets, godkjenne migreringer), forbruk brukt og forslag til neste oppgave.
 
 Sparing på forbruk:
 - Gi underagentene konkrete filstier, så de slipper å lete.
