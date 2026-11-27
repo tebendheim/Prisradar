@@ -19,5 +19,15 @@ select * from public.browse_models_v1(q) limit 12
 $fn$;
 revoke all on function public.browse_models_v1(text),public.display_model_v1(text) from public,anon;
 grant execute on function public.browse_models_v1(text),public.display_model_v1(text) to authenticated,service_role;
+create or replace function public.category_offers_v1(q text) returns table(id bigint,name text,host text,url text,gtin text,model text,price numeric,shipping numeric,total_price numeric,availability text,checked timestamptz)
+language sql stable security invoker set search_path='' as $fn$
+select o.id,o.name,o.host,o.url,o.gtin,o.model,o.price,o.shipping,o.price+o.shipping,o.availability,o.checked
+from public.offers o where (select public.is_member()) and length(trim(q)) between 2 and 160
+and (strpos(lower(o.name),lower(trim(q)))>0 or to_tsvector('simple',o.name) @@ plainto_tsquery('simple',q)
+or (lower(trim(q)) in ('hodetelefoner','hodetelefon','headphones') and lower(o.name) ~ '(airpods|headphones|hodetelefon|headset|earbuds|ørepropper)'))
+order by o.checked desc,o.price limit 200
+$fn$;
+revoke all on function public.category_offers_v1(text) from public,anon;
+grant execute on function public.category_offers_v1(text) to authenticated;
 commit;
 notify pgrst,'reload schema';
