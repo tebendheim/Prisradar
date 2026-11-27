@@ -7,7 +7,7 @@ from sources import microdata
 from store_search import search_url,links
 import socket,ipaddress,time
 from catalog_seed import MODELS, URLS
-from store_rank import rank,relevant,categories
+from store_rank import rank,relevant,categories,store_categories
 from merchant_feed import learn_assortment,cached_feed,feed_offers
 from affiliate_feed import affiliate_items,configurations
 from store_adapters import profile,probe_candidates,public_search
@@ -16,7 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 def matches(text,q):
     terms=words(q)
     tokens=set(words(urllib.parse.unquote(text)))
-    if not terms or not all(t in tokens for t in terms):return False
+    required=[t for t in terms if t!="apple"] if "airpods" in terms else terms
+    if not required or not all(t in tokens for t in required):return False
+    if "airpods" in terms and any(t in tokens for t in ("deksel","reservedel","replacement","beskyttelsesetui","earhooks","earhook")) and not any(t in terms for t in ("deksel","reservedel","replacement","beskyttelsesetui","earhooks","earhook")):return False
     if "airpods" in terms and any(t.isdigit() for t in terms):
         model=re.search(r"airpods\s+(?:(?:pro|max)\s+)?(\d+)",text.lower())
         if model and model.group(1) not in terms:return False
@@ -92,7 +94,11 @@ def process_one(deadline):
         if row["category"] in categories(q):learned[row["host"]]=learned.get(row["host"],0)+row["samples"]
     hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0))+(15 if config[h].get('feed_path') or config[h].get('adapter') in ('shopify','woocommerce') or h.removeprefix('www.') in configurations() else 0),reverse=True)
     preferred=[h for h in hosts if learned.get(h,0) or relevant(h,q,len(evidence.get(h,[])))]
-    hosts=preferred+[h for h in hosts if h not in preferred]
+    # Known unrelated stores are not searched without product-specific evidence.
+    hosts=[h for h in hosts if relevant(h,q,len(evidence.get(h,[]))) or learned.get(h,0)]
+    hosts.sort(key=lambda h:(bool(evidence.get(h)),bool(categories(q)&store_categories(h)),bool(learned.get(h,0))),reverse=True)
+    if not hosts:
+        db("active_searches",{"query":"eq."+q},"PATCH",{"next_check":stamp(0.08)},"return=minimal");return False
     # Parallel across different shops, never parallel requests to the same shop.
     db("search_store_checks",{"on_conflict":"query,host"},"POST",[{"query":q,"host":h} for h in hosts],"resolution=ignore-duplicates,return=minimal")
     checks=db("search_store_checks",{"query":"eq."+q,"select":"host,next_check,checked","limit":"500"})
@@ -212,7 +218,12 @@ def process_store(host,q,config,prior,deadline,budget):
                     p=Page();p.feed(raw.decode("utf8","replace"))
                     if not any("Product" in types(x) for x in walk(p.scripts)):offers=microdata(raw,u,host,stamp())
                 offers=[o for o in offers if offer_matches(o["name"],o.get("gtin"),o.get("model"),q)]
-                if not offers:rejected+=1;continue
+                if not offers:
+                    rejected+=1
+                    p=Page();p.feed(raw.decode("utf8","replace"))
+                    structured=[x for x in walk(p.scripts) if "Product" in types(x)]
+                    print(host,"rejected product",urllib.parse.urlsplit(u).path[:150],"structured products",len(structured),"names",[str(x.get("name",""))[:100] for x in structured[:3]],"currency",p.meta.get("product:price:currency") or p.meta.get("og:price:currency") or "not explicit in meta",flush=True)
+                    continue
                 persist_offers(host,q,offers)
                 found+=len(offers);total+=len(offers)
             except urllib.error.HTTPError as e:
