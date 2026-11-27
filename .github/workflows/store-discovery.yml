@@ -1,0 +1,27 @@
+name: Store discovery
+on:
+  schedule:
+    - cron: '43 */2 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: prisradar-crawler
+  cancel-in-progress: false
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s crawler
+      - name: Discover and verify candidates
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python crawler/brreg_seed.py
+          PYTHONPATH=crawler python -c 'import time; from store_adapters import probe_candidates; probe_candidates(time.monotonic()+210,limit=16)'
