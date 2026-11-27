@@ -90,7 +90,7 @@ def process_one(deadline):
     learned={}
     for row in optional_assortment():
         if row["category"] in categories(q):learned[row["host"]]=learned.get(row["host"],0)+row["samples"]
-    hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0)),reverse=True)
+    hosts.sort(key=lambda h:rank(h,q,len(evidence.get(h,[])),history.get(h,0))+min(45,learned.get(h,0))+(15 if config[h].get('feed_path') or config[h].get('adapter') in ('shopify','woocommerce') or h.removeprefix('www.') in configurations() else 0),reverse=True)
     preferred=[h for h in hosts if learned.get(h,0) or relevant(h,q,len(evidence.get(h,[])))]
     hosts=preferred+[h for h in hosts if h not in preferred]
     # Parallel across different shops, never parallel requests to the same shop.
