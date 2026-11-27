@@ -3,7 +3,7 @@ from durable import words
 GROUPS={
  "electronics": "airpods hodetelefon headphones iphone ipad macbook laptop pc skjerm tv kamera mobil robotstøvsuger playstation xbox samsung apple garmin".split(),
  "sport": "ski sykkel løpesko telt sovepose tursekk fjellsko squash".split(),
- "home": "gryte stekepanne kjøkken kniv kaffetrakter blender kjøkkenmaskin tallerken mummikopp".split(),
+ "home": "gryte stekepanne kjøkken kniv kaffetrakter blender kjøkkenmaskin kjøkkenmaskiner ankarsrum assistent kenwood kitchenaid tallerken mummikopp".split(),
  "fashion": "kjole bukse jakke genser skjorte ullsokker".split(),
  "beauty": "parfyme mascara sjampo serum leppestift".split(),
  "building": "drill skrutrekker sag maling verktøy".split(),
