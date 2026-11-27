@@ -1,5 +1,17 @@
 # Backlog (vedlikeholdes av prosjektleder)
 
+## Veikart: bedre enn Prisjakt, innenfor gratisnivåene (målt 2026-11-27)
+Status: 11 aktive butikker, 3 med tilbud, 41 tilbud, treffrate 19 % siste 7 dager, 99 av 107 butikkandidater aldri sjekket, database 45 MB av 500 MB.
+Prisjakt har tusenvis av butikker, åpent søk uten innlogging, produktsider med prishistorikk, prisvarsel, kategorier, filtrering og butikkvurderinger. Rekkefølgen under gir mest effekt først:
+- A. Dekning: sjekk butikkandidater mye raskere (i dag 4 per døgn) og finn flere kandidater.
+- B. Treffrate: plattform-API-er (Shopify, WooCommerce, Magento og andre) og bedre søkestier for butikker med «no matching product URLs».
+- C. Åpent søk uten innlogging, med misbruksvern (krever brukerens beslutning).
+- D. Live-søk i Cloudflare Function (punkt 9), som gir svar på sekunder.
+- E. Produktside med delbar URL, prishistorikk og laveste pris siste 30 dager (punkt 1), og SEO for trafikk.
+- F. Prisvarsler i appen (punkt 2), filtrering (på lager, frakt inkludert, butikk) og kategorier.
+- G. Butikkvurdering basert på egne målinger (ferskhet, treff, feilrate).
+- H. Forbruksmåleren for Claude teller ikke (viser 0 %). Må fikses så 20 %-grensen holdes.
+
 ## Klar
 1. Prishistorikk i UI: RPC `price_history_v1` og «laveste pris siste 30 dager» per produkt (dataene finnes allerede i `price_history`).
 2. Prisvarsler i appen: RPC `watch_hits_v1` (lagrede ønsker mot laveste ferske pris), merke og liste ved innlogging. E-post og push er utenfor rammen, fordi det ikke er gratis eller trygt.
@@ -10,6 +22,8 @@
 9. (Stor, egen sprint, krever brukerens godkjenning av nøkkel i Cloudflare) Live-søk i Cloudflare Function mot butikker med verifisert JSON-søk, robots-status fra Supabase og takt per butikk. Det gir størst fartsgevinst og bruker null Actions-minutter.
 
 ## Pågår
+- A. Raskere butikkoppdagelse (implementerer)
+- B. Høyere treffrate via plattform-API-er (implementerer)
 
 ## Ferdig
 - 2026-11-27 Mer arbeid per Actions-minutt: tidlig avslutning når det ikke er noe å gjøre, tidsstyrt søkeløkke (390 s), lås per host (12 tråder, aldri parallelt mot samme butikk), 20 butikker per katalogkjøring
