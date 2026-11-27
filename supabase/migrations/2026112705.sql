@@ -13,6 +13,7 @@ from public.offers o where (select public.is_member()) and length(trim(q)) betwe
 and (case when public.valid_gtin_v1(trim(q)) is not null then public.valid_gtin_v1(o.gtin)=public.valid_gtin_v1(trim(q)) else lower(o.model)=lower(trim(q)) or strpos(lower(o.name),lower(trim(q)))>0 or to_tsvector('simple',o.name) @@ plainto_tsquery('simple',q) end)
 order by case when o.availability in ('OutOfStock','SoldOut','Discontinued') then 1 else 0 end,case when o.price_kind='from' then 1 else 0 end,o.price+o.shipping asc nulls last,o.price,o.id limit least(100,greatest(1,coalesce(max_results,100)))
 $$;
+grant execute on function public.valid_gtin_v1(text) to authenticated;
 revoke all on function public.search_offers_v2(text,integer) from public,anon;
 grant execute on function public.search_offers_v2(text,integer) to authenticated;
 create or replace function public.store_quality_v1() returns jsonb language sql stable security definer set search_path='' as $$
